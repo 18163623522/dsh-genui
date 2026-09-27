@@ -169,7 +169,10 @@ try {
   // ── 浏览器渲染 ───────────────────────────────────────────────────────────
   const { chromium } = await loadPlaywright()
   browser = await chromium.launch({ channel: 'chrome', headless: true })
-  const page = await browser.newPage({ viewport: { width: 1440, height: 3000 } })
+  // locale 必须显式指定：本脚本断言的是插件的中文 i18n（如堆叠图 tooltip 的「合计」
+  // = block.total），而 playwright 默认 locale 是 en-US，插件会回落成 "Total"，
+  // 断言必然失败。e2e.mjs 的 newPage 已显式传 zh-CN，这里保持一致。
+  const page = await browser.newPage({ viewport: { width: 1440, height: 3000 }, locale: 'zh-CN' })
   const pageErrors: string[] = []
   page.on('pageerror', e => pageErrors.push(String(e)))
   // Engine-split evidence: which lazy assets the page actually pulls.
