@@ -169,9 +169,9 @@ try {
   // ── 浏览器渲染 ───────────────────────────────────────────────────────────
   const { chromium } = await loadPlaywright()
   browser = await chromium.launch({ channel: 'chrome', headless: true })
-  // locale 必须显式指定：本脚本断言的是插件的中文 i18n（如堆叠图 tooltip 的「合计」
-  // = block.total），而 playwright 默认 locale 是 en-US，插件会回落成 "Total"，
-  // 断言必然失败。e2e.mjs 的 newPage 已显式传 zh-CN，这里保持一致。
+  // 本脚本包含中文 i18n 文案断言（如堆叠图 tooltip 的「合计」= block.total），
+  // 因此显式固定 zh-CN，避免测试结果受运行环境的系统 locale 影响。
+  // e2e.mjs 同样显式使用 zh-CN。
   const page = await browser.newPage({ viewport: { width: 1440, height: 3000 }, locale: 'zh-CN' })
   const pageErrors: string[] = []
   page.on('pageerror', e => pageErrors.push(String(e)))
