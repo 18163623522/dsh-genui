@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.11.2-preview.1] - 2026-09-26
+## [0.11.2] - 2026-09-28
 
 ### 新增
 
@@ -12,7 +12,7 @@
 ### 兼容性
 
 - `preview-latest` 与 Release API、packed smoke 宿主检查统一更新为 DSH `0.1.7-rc.2`，并保留 `0.1.7-rc.1` API 标签检查能力。
-- Session format v4 的 fence repair feedback 使用 producer-owned source kind，避免新版 DSH 拒绝反馈消息；同时识别原始插件来源和迁移后的 v4 来源（#218、PR #220）。
+- Session format v4 的 fence repair feedback 使用 producer-owned source kind `plugin:@changfenhuang/dsh-genui`，修复反馈消息因旧 source kind 被新版 DSH 拒绝、导致会话持久化失败的问题；旧 Session format 继续使用 legacy source，并同时识别两种插件来源（#218、PR #220）。
 
 ### 修复
 
