@@ -189,9 +189,15 @@ describe('planFenceFeedback: the bounds that prevent a retry storm', () => {
     expect(finalReply!.text).toContain("type 'stat' requires label")
   })
 
-  it('stays silent for the same turn (at most one correction per turn)', () => {
-    expect(planFenceFeedback({ ...base, lastCorrectedTurn: 1 })).toBeNull()
+  it('allows a SECOND correction in the same turn, never a third', () => {
+    // Evidence (session-ccc8f3e2, 2026-09-29): the render-failure correction was
+    // answered with another reasoning-only turn 4 times out of 4. Under a
+    // one-per-turn budget those turns ended with an empty body — the second
+    // slot is what lets the reasoning-only correction land.
+    expect(planFenceFeedback({ ...base, lastCorrectedTurn: 1 })).not.toBeNull()
     expect(planFenceFeedback({ ...base, lastCorrectedTurn: 0 })).not.toBeNull()
+    expect(planFenceFeedback({ ...base, correctionsThisTurn: 2 })).toBeNull()
+    expect(planFenceFeedback({ ...base, correctionsThisTurn: 1 })).not.toBeNull()
   })
 
   it('stays silent for a fence body already corrected', () => {
@@ -221,10 +227,18 @@ describe('planFenceFeedback: the bounds that prevent a retry storm', () => {
     expect(plan!.fingerprints).toEqual([fingerprint])
     expect(plan!.text).toContain('next=emit_fence_in_body')
     expect(plan!.text).toContain('status=fence_in_reasoning_only')
-    // Same bounds as a render failure.
-    expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, lastCorrectedTurn: 1 })).toBeNull()
+    // The correction carries the body verbatim so the model only has to copy it
+    // (an answer that was asked again with a description replayed the previous
+    // reasoning byte-for-byte).
+    const withBody = planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, reasoningFenceRaw: BROKEN })
+    expect(withBody!.text).toContain('```dsh-ui')
+    expect(withBody!.text).toContain(BROKEN)
+    expect(withBody!.text).toContain('不要先写思考')
+    // Bounds: same fingerprint never repeats; the turn budget is shared.
     expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, corrected: new Set([fingerprint]) })).toBeNull()
     expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, aborted: true })).toBeNull()
+    expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, correctionsThisTurn: 2 })).toBeNull()
+    expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, correctionsThisTurn: 1 })).not.toBeNull()
     // An empty body with no composed fence stays silent.
     expect(planFenceFeedback({ ...base, text: '' })).toBeNull()
   })
@@ -312,6 +326,35 @@ describe('installFenceFeedback wiring', () => {
     // One correction per turn even for this path.
     h.boundary({ agent, turn: 7, signal: new AbortController().signal })
     expect(h.steer).toHaveBeenCalledTimes(1)
+  })
+
+  it('steers a second time in the same turn when the first correction was answered empty', () => {
+    // The whole point of the two-slot budget: correction #1 (render failure) is
+    // answered with another reasoning-only turn, so #2 asks for the body.
+    const h = harness()
+    h.emitSession(userEvent())
+    h.emitSession(assistantEvent(reply(BROKEN)))
+    const agent = { session: { id: 'sess-1', header: { id: 'sess-1', version: 4 } }, steer: h.steer }
+    h.boundary({ agent, turn: 9, signal: new AbortController().signal })
+    expect(h.steer).toHaveBeenCalledTimes(1)
+
+    // The model answers with a reasoning-only message carrying the FIXED fence
+    // (a different body → its own fingerprint, so the ledger allows it).
+    h.emitSession({
+      type: 'assistant/message',
+      seq: 5,
+      time: 2,
+      data: { message: { content: [{ type: 'reasoning', text: reply(STAT_GROUP) }] } },
+    } as unknown as SessionEvent)
+    h.boundary({ agent, turn: 9, signal: new AbortController().signal })
+    expect(h.steer).toHaveBeenCalledTimes(2)
+    const second = h.steer.mock.calls[1]![0] as { content: Array<{ text: string }> }
+    expect(second.content[0]!.text).toContain('next=emit_fence_in_body')
+    expect(second.content[0]!.text).toContain(STAT_GROUP)
+
+    // A third boundary in the same turn stays silent.
+    h.boundary({ agent, turn: 9, signal: new AbortController().signal })
+    expect(h.steer).toHaveBeenCalledTimes(2)
   })
 
   it('never steers for a subagent session', () => {

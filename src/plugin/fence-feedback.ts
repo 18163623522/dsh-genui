@@ -8,8 +8,14 @@
  *
  * The loop is deliberately narrow, matching the contract agreed on the issue:
  * - **默认开启。** 插件配置中的 `fenceFeedback: false` 可以关闭回合转向。
- * - **Bounded.** At most one correction per turn AND at most one per fence
- *   body per process, so a correction that is itself wrong cannot loop.
+ * - **Bounded.** At most two corrections per turn (the second is reserved for
+ *   the case where the first is answered with another reasoning-only turn) AND
+ *   at most one per fence body per process, so a correction that is itself
+ *   wrong cannot loop.
+ * - **Reasoning-only recovery.** A turn whose body carries no fence but whose
+ *   reasoning block composed one gets a correction that hands the body back
+ *   verbatim; one real session had five such turns (the model kept ending the
+ *   turn with the fence only in its thinking).
  * - **Never for subagents.** A child session's fence belongs to a parent reply.
  * - **Exact fence matching.** Only an info string of exactly `dsh-ui` opens a
  *   fence, so ` ```dsh-ui-dark `, indented prose, or a mention of the name is
@@ -38,6 +44,14 @@ export const FEEDBACK_SOURCE_KIND = `plugin:${FEEDBACK_PLUGIN_NAME}` as const
 
 /** Marker prefix inside the correction text: `[genui-fence-repair #<fingerprint>]`. */
 const MARKER_PREFIX = '[genui-fence-repair #'
+/**
+ * Corrections a single turn may receive. Two, not one: when the first (a fence
+ * that failed to RENDER) is answered with another reasoning-only turn, the
+ * second is the only chance to get it into the body. Bounded, and the per-fence
+ * fingerprint ledger still prevents any repeat for the same fence body.
+ */
+export const MAX_CORRECTIONS_PER_TURN = 2
+
 /** Marker prefix written by older plugin versions. */
 const LEGACY_MARKER_PREFIX = '[genui 自修 #'
 
@@ -184,10 +198,16 @@ interface SessionFeedback {
    * this turn (empty string when none). Ask for it in the body at the boundary.
    */
   reasoningFence: string
+  /** Raw body of that reasoning-only fence (handed back to the model verbatim). */
+  reasoningRaw: string
   /** Fence fingerprints already corrected in this process. */
   corrected: Set<string>
   /** Turn that already received its one correction. */
   lastCorrectedTurn: number | undefined
+  /** Corrections already steered in {@link correctionsTurn}. */
+  correctionsThisTurn: number
+  /** Turn {@link correctionsThisTurn} counts. */
+  correctionsTurn: number | undefined
 }
 
 /** What the pure planner needs to decide whether a correction may be sent. */
@@ -205,6 +225,17 @@ export interface FenceFeedbackPlanInput {
    * in the message body, so no UI ever mounted.
    */
   readonly reasoningFence?: string | undefined
+  /** Raw body of that reasoning-only fence, handed back to the model verbatim. */
+  readonly reasoningFenceRaw?: string | undefined
+  /**
+   * Corrections already steered in this turn. A turn gets
+   * {@link MAX_CORRECTIONS_PER_TURN} attempts: the first corrects a fence that
+   * failed to render, the second is reserved for the "the model answered the
+   * first correction with another reasoning-only turn" case (observed: the
+   * render-failure correction was answered that way 4/4 times in one session,
+   * and a one-per-turn budget left those turns empty).
+   */
+  readonly correctionsThisTurn?: number | undefined
 }
 
 /** A correction the caller must account for before steering. */
@@ -224,14 +255,19 @@ export interface FenceFeedbackPlan {
  */
 export function planFenceFeedback(input: FenceFeedbackPlanInput): FenceFeedbackPlan | null {
   if (input.aborted) return null
-  if (input.lastCorrectedTurn === input.turn) return null
+  const used = input.correctionsThisTurn ?? (input.lastCorrectedTurn === input.turn ? 1 : 0)
+  if (used >= MAX_CORRECTIONS_PER_TURN) return null
   const reasoningFence = input.reasoningFence
   // The model composed the fence in its reasoning and never wrote it into the
   // reply: nothing mounted, so ask for it in the body. Bounded by the same
   // per-turn / per-fence accounting as a render failure.
   if (input.text.trim() === '') {
     if (reasoningFence === undefined || input.corrected.has(reasoningFence)) return null
-    return { text: missingBodyCorrectionText(reasoningFence), fingerprints: [reasoningFence], turn: input.turn }
+    return {
+      text: missingBodyCorrectionText(reasoningFence, input.reasoningFenceRaw),
+      fingerprints: [reasoningFence],
+      turn: input.turn,
+    }
   }
   const failures = fenceFailures(input.text).filter(failure => !input.corrected.has(failure.fingerprint))
   if (failures.length === 0) return null
@@ -248,8 +284,18 @@ export function planFenceFeedback(input: FenceFeedbackPlanInput): FenceFeedbackP
  * @param fingerprint - fingerprint of that fence body.
  * @returns the message text to steer into the running turn.
  */
-export function missingBodyCorrectionText(fingerprint: string): string {
-  return `${MARKER_PREFIX}${fingerprint}]\n\n[genui-fence-repair]\nstatus=fence_in_reasoning_only\nfences=1\nnext=emit_fence_in_body\nrepeat_rendered_content=false\nreply_language=conversation\n\nreasoning 里的 \`\`\`dsh-ui 围栏不会渲染（用户看不到）；把同一份围栏原样写进**回答正文**再结束本轮，别再重复解释。\n`
+export function missingBodyCorrectionText(fingerprint: string, body?: string): string {
+  const head = `${MARKER_PREFIX}${fingerprint}]\n\n[genui-fence-repair]\nstatus=fence_in_reasoning_only\nfences=1\nnext=emit_fence_in_body\nrepeat_rendered_content=false\nreply_language=conversation\n\n`
+  const trimmed = body?.trim() ?? ''
+  // Handing back the exact body (not just a description of the requirement) is
+  // deliberate: one observed answer was byte-identical to the previous turn's
+  // reasoning, i.e. asked again the model replayed its plan. A different prompt
+  // with the concrete target breaks that pattern, and the model only has to
+  // copy it.
+  if (trimmed === '') {
+    return `${head}reasoning 里的 dsh-ui 围栏不会渲染（用户看不到）；把同一份围栏写进**回答正文**再结束本轮，别再重复解释。\n`
+  }
+  return `${head}你上一条回答的**正文是空的**（围栏写在了 reasoning 里，用户什么都看不到）。\n**只输出下面这一段**：原样复制，不要改动、不要补解释、不要先写思考，输出完就结束本轮。\n\n\`\`\`dsh-ui\n${trimmed}\n\`\`\`\n`
 }
 
 /** Text of one assistant message's text blocks, in order. */
@@ -315,7 +361,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
   const stateOf = (sessionId: string): SessionFeedback => {
     let state = sessions.get(sessionId)
     if (state === undefined) {
-      state = { text: '', reasoningFence: '', corrected: new Set(), lastCorrectedTurn: undefined }
+      state = { text: '', reasoningFence: '', reasoningRaw: '', corrected: new Set(), lastCorrectedTurn: undefined, correctionsThisTurn: 0, correctionsTurn: undefined }
       sessions.set(sessionId, state)
     }
     return state
@@ -344,6 +390,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
       const state = stateOf(sessionId)
       state.text = ''
       state.reasoningFence = composed === undefined ? '' : fenceFingerprint(composed.raw)
+      state.reasoningRaw = composed === undefined ? '' : composed.raw
       return
     }
     if (event.type !== 'user/message') return
@@ -362,6 +409,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
     if (state !== undefined) {
       state.text = ''
       state.reasoningFence = ''
+      state.reasoningRaw = ''
     }
   })
 
@@ -371,6 +419,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
     if (agent.session.header.parentSession !== undefined) return
     const state = sessions.get(String(agent.session.id))
     if (state === undefined) return
+    const usedThisTurn = state.correctionsTurn === turn ? state.correctionsThisTurn : 0
     const plan = planFenceFeedback({
       text: state.text,
       turn,
@@ -378,11 +427,15 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
       corrected: state.corrected,
       aborted: signal.aborted,
       reasoningFence: state.reasoningFence === '' ? undefined : state.reasoningFence,
+      reasoningFenceRaw: state.reasoningRaw === '' ? undefined : state.reasoningRaw,
+      correctionsThisTurn: usedThisTurn,
     })
     if (plan === null) return
     // Account BEFORE sending: a re-entrant boundary must not deliver twice.
     for (const fingerprint of plan.fingerprints) state.corrected.add(fingerprint)
     state.lastCorrectedTurn = plan.turn
+    state.correctionsTurn = plan.turn
+    state.correctionsThisTurn = usedThisTurn + 1
     try {
       agent.steer(createFeedbackMessage(plan.text, agent.session.header.version))
     } catch (error) {
