@@ -234,11 +234,19 @@ describe('planFenceFeedback: the bounds that prevent a retry storm', () => {
     expect(withBody!.text).toContain('```dsh-ui')
     expect(withBody!.text).toContain(BROKEN)
     expect(withBody!.text).toContain('不要先写思考')
-    // Bounds: same fingerprint never repeats; the turn budget is shared.
-    expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, corrected: new Set([fingerprint]) })).toBeNull()
+    // A retry of the SAME body IS allowed: the model left a fine body in its
+    // thinking, and one real stall answered the retry with a byte-identical
+    // reasoning block — the ledger must not block the only retry that can land.
+    const again = planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, reasoningFenceRaw: BROKEN, corrected: new Set([fingerprint]) })
+    expect(again).not.toBeNull()
+    expect(again!.text).toContain('正文是空的')
+    expect(again!.text).toContain(BROKEN)
+    const second = planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, correctionsThisTurn: 1, reasoningFenceRaw: BROKEN })
+    expect(second!.text).toContain('第 2 次要求')
+    expect(second!.text).toContain(BROKEN)
+    // Bounds: the per-turn budget still applies.
     expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, aborted: true })).toBeNull()
     expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, correctionsThisTurn: 2 })).toBeNull()
-    expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, correctionsThisTurn: 1 })).not.toBeNull()
     // An empty body with no composed fence stays silent.
     expect(planFenceFeedback({ ...base, text: '' })).toBeNull()
   })
@@ -323,9 +331,15 @@ describe('installFenceFeedback wiring', () => {
     expect(h.steer).toHaveBeenCalledTimes(1)
     const message = h.steer.mock.calls[0]![0] as { content: Array<{ text: string }> }
     expect(message.content[0]!.text).toContain('next=emit_fence_in_body')
-    // One correction per turn even for this path.
+    // The same reasoning-only stall gets a second chance in the same turn (the
+    // model answered a real retry with a byte-identical reasoning block), and
+    // then the per-turn budget closes the turn.
     h.boundary({ agent, turn: 7, signal: new AbortController().signal })
-    expect(h.steer).toHaveBeenCalledTimes(1)
+    expect(h.steer).toHaveBeenCalledTimes(2)
+    const retry = h.steer.mock.calls[1]![0] as { content: Array<{ text: string }> }
+    expect(retry.content[0]!.text).toContain('第 2 次要求')
+    h.boundary({ agent, turn: 7, signal: new AbortController().signal })
+    expect(h.steer).toHaveBeenCalledTimes(2)
   })
 
   it('steers a second time in the same turn when the first correction was answered empty', () => {

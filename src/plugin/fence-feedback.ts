@@ -262,9 +262,15 @@ export function planFenceFeedback(input: FenceFeedbackPlanInput): FenceFeedbackP
   // reply: nothing mounted, so ask for it in the body. Bounded by the same
   // per-turn / per-fence accounting as a render failure.
   if (input.text.trim() === '') {
-    if (reasoningFence === undefined || input.corrected.has(reasoningFence)) return null
+    if (reasoningFence === undefined) return null
+    // Deliberately NOT gated on `corrected` here. That ledger exists to stop a
+    // RENDER failure from being corrected twice, but this path is different:
+    // the body is already fine — the model simply left it in its thinking. One
+    // real stall answered the retry with a BYTE-IDENTICAL reasoning block, so
+    // the ledger blocked the only retry that could have landed. The per-turn
+    // budget below is what bounds this path.
     return {
-      text: missingBodyCorrectionText(reasoningFence, input.reasoningFenceRaw),
+      text: missingBodyCorrectionText(reasoningFence, input.reasoningFenceRaw, used + 1),
       fingerprints: [reasoningFence],
       turn: input.turn,
     }
@@ -284,7 +290,7 @@ export function planFenceFeedback(input: FenceFeedbackPlanInput): FenceFeedbackP
  * @param fingerprint - fingerprint of that fence body.
  * @returns the message text to steer into the running turn.
  */
-export function missingBodyCorrectionText(fingerprint: string, body?: string): string {
+export function missingBodyCorrectionText(fingerprint: string, body?: string, attempt = 1): string {
   const head = `${MARKER_PREFIX}${fingerprint}]\n\n[genui-fence-repair]\nstatus=fence_in_reasoning_only\nfences=1\nnext=emit_fence_in_body\nrepeat_rendered_content=false\nreply_language=conversation\n\n`
   const trimmed = body?.trim() ?? ''
   // Handing back the exact body (not just a description of the requirement) is
@@ -295,7 +301,10 @@ export function missingBodyCorrectionText(fingerprint: string, body?: string): s
   if (trimmed === '') {
     return `${head}reasoning 里的 dsh-ui 围栏不会渲染（用户看不到）；把同一份围栏写进**回答正文**再结束本轮，别再重复解释。\n`
   }
-  return `${head}你上一条回答的**正文是空的**（围栏写在了 reasoning 里，用户什么都看不到）。\n**只输出下面这一段**：原样复制，不要改动、不要补解释、不要先写思考，输出完就结束本轮。\n\n\`\`\`dsh-ui\n${trimmed}\n\`\`\`\n`
+  const why = attempt <= 1
+    ? '你上一条回答的**正文是空的**（围栏写在了 reasoning 里，用户什么都看不到）。'
+    : `这是第 ${attempt} 次要求：你已经连续把回答写在思考里、正文留空。`
+  return `${head}${why}\n**只输出下面这一段**：原样复制，不要改动、不要补解释、不要先写思考，输出完就结束本轮。\n\n\`\`\`dsh-ui\n${trimmed}\n\`\`\`\n`
 }
 
 /** Text of one assistant message's text blocks, in order. */
