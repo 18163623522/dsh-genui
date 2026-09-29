@@ -246,4 +246,16 @@ description: "Render structured interactive UI inline through the dsh-ui fence. 
 8. **规格要紧凑**：整棵组件树 ≤200 节点、≤8 层嵌套（超出部分会被渲染器裁掉），避免巨型 spec
 9. **一个主题选一个主组件**：命中映射表后选**一种**组件承载，同一信息不要用两种组件重复表达（同一批数据又画 bars 又画 donut = 冗余）
 10. **数量纪律**：一条回答 3–8 个组件为宜，宁缺毋滥。反例：该用 `table` 对比时写三段 `text`；一个 `stat` 能说清的事套 `card`+`grid`；与内容无关的 `scene3d` 炫技——3D 只在内容本身就是几何/空间时才用
+12. **给命令就给能直接粘的**：多行 python 一律写成 heredoc 包装的**一整段** shell 代码块（`python - <<'PY'` … `PY`），不要用 `python -c "…"` 配反斜杠续行——续行在复制/粘贴里最容易碎成多行，用户还得自己拼回 heredoc。单行表达式才用 `-c`，且必须真的在一行内写完。示例：
+
+    ````text
+    cd /path/to/repo
+    python - <<'PY'
+    import json
+    d = json.load(open('report.json'))
+    print(d.get('status'))
+    PY
+    ````
+
+    同理：需要用户执行的脚本放进 `code` 节点（`lang`: `bash`/`python`）或正文围栏，并保证**从第一行到最后一行一次粘进终端就能跑**。
 11. **先验后发（复杂 UI）**：发出 ```dsh-ui 围栏前，若 spec ≥3 个组件或含 `table`（长表格最易括号错位），先调用 `validate_dsh_ui` 工具（参数 `spec` 传围栏内的 JSON 文本）验证；返回 `next=fix_and_revalidate` 就按诊断修正后重新验证；返回 `next=emit_fence` 再发出；返回 `next=emit_repaired_fence` 时直接照抄 `repaired_json` 发出，无需再次验证；简单 UI（≤2 个组件）不必验证，渲染器会自动修复大部分标点/括号错误

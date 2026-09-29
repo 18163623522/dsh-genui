@@ -41,3 +41,17 @@ describe('SKILL.md frontmatter (host yaml parser)', () => {
     expect(data.description).not.toMatch(/[\u3400-\u9fff]/u)
   })
 })
+
+describe('SKILL.md command-delivery contract', () => {
+  const raw = readFileSync(join(process.cwd(), 'SKILL.md'), 'utf8')
+
+  it('requires a copy-paste-runnable heredoc for multi-line python', () => {
+    // Real-session complaint: the model delivered a multi-line python as
+    // `python -c "…"` with backslash continuations; the user copied it, had to
+    // reassemble it, and ended up writing the heredoc by hand. The skill must
+    // keep telling the model to emit ONE pasteable block instead.
+    expect(raw).toContain("python - <<'PY'")
+    expect(raw).toMatch(/不要用 `python -c/)
+    expect(raw).toContain('一次粘进终端就能跑')
+  })
+})
