@@ -140,6 +140,27 @@ describe('installDomFenceRenderer', () => {
     } finally { dispose() }
   })
 
+  it('takes over a generic banner whose body only needs tier-1 punctuation repairs', async () => {
+    // Real session (seq 40530): the model finally emitted the fence in the body,
+    // but one value carried unescaped half-width quotes. The host hides the
+    // `dsh-ui` language (unsupported by its highlighter) and the ChatSnapshot
+    // language source was unavailable for that row, so content recognition was
+    // the only path left — and it demanded a raw JSON.parse, so a perfectly
+    // renderable fence stayed a code block. Recognition now runs the same tier-1
+    // repair as the labelled path.
+    const repairable = '{"items":[{"type":"keyvalue","pairs":[{"key":"备注","value":"他说"可以"了 ✓"}]}]}'
+    expect(() => JSON.parse(repairable)).toThrow()
+    const row = assistantRow('generic-repairable')
+    const block = genericCodeBlock(repairable)
+    row.appendChild(block)
+    document.body.appendChild(row)
+    const dispose = installDomFenceRenderer(makeModernCtx('generic-session'), () => {})
+    try {
+      expect(await waitFor(() => block.hasAttribute('data-genui-rendered'))).toBe(true)
+      expect(await waitFor(() => row.querySelector('.genui-dom-fence')?.textContent?.includes('可以') === true)).toBe(true)
+    } finally { dispose() }
+  })
+
   it.each([
     '{"name":"ordinary","items":[]}',
     '{"items":[{"type":"text","content":',

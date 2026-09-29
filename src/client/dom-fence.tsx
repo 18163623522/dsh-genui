@@ -58,6 +58,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { GenuiActionContext, type GenuiActionHandler } from './action-context.ts'
 import css from './GenuiBlock.module.css'
 import { renderSvgFence } from './svg-fence.tsx'
+import { repairFenceJson } from '../shared/fence-repair.ts'
 import { describeFenceFailure, FenceDiagnostic, renderResolvedFenceNode, type GenuiFenceContext } from './fence-render.tsx'
 import { resolveViewedSessionId } from './session-resolver.ts'
 import { validateCanonicalGenuiSpec } from './guard.ts'
@@ -210,7 +211,17 @@ function labelTextOf(block: Element): string {
   return ''
 }
 
-/** 仅在通用 CodeBlock 的完整 JSON 通过现有 GenUI 规范时恢复丢失的围栏语言。
+/**
+ * 仅在通用 CodeBlock 的内容经过**与带标签路径相同的标点级修复**后仍是合规 GenUI
+ * 规范时，恢复丢失的围栏语言。
+ *
+ * 宿主会隐去它不认识的语言（高亮器不支持 `dsh-ui`），于是同一份围栏在 DOM 里表现为
+ * 一个「代码块/Code block」标签的普通代码块；ChatSnapshot 的语言来源在部分行上不可用
+ * 时，内容识别是唯一出路。此前这里要求 `JSON.parse(raw)` 直接通过，导致**正文只差一个
+ * 未转义引号（tier-1 能修）的围栏永远不会被接管**——用户看到一个能渲染却始终是代码块的
+ * 围栏（真实会话 seq 40530：正文经 tier-1 修 14 处后可渲染，界面却停在代码块）。
+ * 结构级修复（tier-2）刻意不参与：内容识别是兜底，不该接管只是"长得像 JSON"的普通代码。
+
  *
  * @param block - 宿主提供的代码块元素。
  * @param raw - 未修改的围栏正文。
@@ -221,9 +232,11 @@ function isGenericGenuiFence(block: Element, raw: string): boolean {
   if (row === null || row.dataset.chatGroupPart === 'reasoning') return false
   if (domLanguageOf(block) !== null || !block.querySelector('[data-code-block-banner]')) return false
   if (!GENERIC_CODE_LABELS.has(labelTextOf(block))) return false
+  const repaired = repairFenceJson(raw)
+  const candidate = repaired === null ? raw : repaired.text
   let value: unknown
   try {
-    value = JSON.parse(raw)
+    value = JSON.parse(candidate)
   } catch {
     return false
   }
