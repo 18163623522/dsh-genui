@@ -89,11 +89,27 @@ function numericColumns(rows: GenuiTable['rows'], nCols: number): boolean[] {
  * Does this cell carry real line breaks? Table cells default to `nowrap` (the
  * data voice), which also collapses the leading whitespace of a pasted code
  * block — indentation is lost and the snippet no longer runs. Cells that do
- * contain a line break get `pre-wrap` instead (see `.tdMultiline`), so both the
- * line structure and the indentation survive.
+ * contain a line break get `pre-line` (see `.tdMultiline`), so the line
+ * structure survives and the text still copies back as multiple lines.
  */
 function hasLineBreak(value: string | number): boolean {
   return typeof value === 'string' && /[\n\r]/.test(value)
+}
+
+/**
+ * Is this cell code rather than prose? Only then is leading indentation
+ * significant (`pre-wrap`), while a prose line break stays `pre-line` so its
+ * surrounding spaces collapse exactly like the rest of the UI.
+ */
+function isCodeCell(value: string | number): boolean {
+  if (typeof value !== 'string') return false
+  return /(^|\n)[ \t]/.test(value) || value.includes('```')
+}
+
+/** The whitespace class a multi-line cell needs, or undefined for single-line. */
+function cellWrapClass(value: string | number): string | undefined {
+  if (!hasLineBreak(value)) return undefined
+  return isCodeCell(value) ? css.tdCode : css.tdMultiline
 }
 
 /** Signed cell text (`+12.4%`, `-3`, `−2.1k`) reads as a delta without any
@@ -319,14 +335,14 @@ export const TableNode = memo(function TableNode({ node, renderDetail, filterVal
 
   const renderCell = (cell: string | number, j: number, rowIndex: number): ReactNode => {
     const type = types[j]
-    const multiline = hasLineBreak(cell)
+    const wrap = cellWrapClass(cell)
     const tone = type === 'delta'
       ? (String(cell).trim().startsWith('-') ? 'down' : 'up')
       : deltaTone(cell)
     return (
       <td
         key={j}
-        className={[numeric[j] || type === 'num' ? css.tdNum : undefined, multiline ? css.tdMultiline : undefined]
+        className={[numeric[j] || type === 'num' ? css.tdNum : undefined, wrap]
           .filter(part => part !== undefined)
           .join(' ') || undefined}
       >
@@ -357,7 +373,7 @@ export const TableNode = memo(function TableNode({ node, renderDetail, filterVal
             {columns.map((c, i) => (
               <th
                 key={i}
-                className={[numeric[i] ? css.thNum : undefined, hasLineBreak(c) ? css.tdMultiline : undefined]
+                className={[numeric[i] ? css.thNum : undefined, cellWrapClass(c)]
                   .filter(part => part !== undefined)
                   .join(' ') || undefined}
                 aria-sort={sort !== null && sort.col === i ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none'}
@@ -378,7 +394,7 @@ export const TableNode = memo(function TableNode({ node, renderDetail, filterVal
               <Fragment key={section.header === null ? `s-${si}` : `g-${section.header.index}`}>
                 {section.header !== null && (
                   <tr className={css.groupRow}>
-                    <td colSpan={columns.length} className={hasLineBreak(String(section.header.row[0])) ? css.tdMultiline : undefined}>
+                    <td colSpan={columns.length} className={cellWrapClass(String(section.header.row[0]))}>
                       <button
                         type="button"
                         className={css.groupToggle}
