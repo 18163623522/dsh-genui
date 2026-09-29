@@ -85,6 +85,17 @@ function numericColumns(rows: GenuiTable['rows'], nCols: number): boolean[] {
   })
 }
 
+/**
+ * Does this cell carry real line breaks? Table cells default to `nowrap` (the
+ * data voice), which also collapses the leading whitespace of a pasted code
+ * block — indentation is lost and the snippet no longer runs. Cells that do
+ * contain a line break get `pre-wrap` instead (see `.tdMultiline`), so both the
+ * line structure and the indentation survive.
+ */
+function hasLineBreak(value: string | number): boolean {
+  return typeof value === 'string' && /[\n\r]/.test(value)
+}
+
 /** Signed cell text (`+12.4%`, `-3`, `−2.1k`) reads as a delta without any
  *  new spec field — the renderer classifies the string. */
 function deltaTone(value: unknown): 'up' | 'down' | null {
@@ -308,11 +319,17 @@ export const TableNode = memo(function TableNode({ node, renderDetail, filterVal
 
   const renderCell = (cell: string | number, j: number, rowIndex: number): ReactNode => {
     const type = types[j]
+    const multiline = hasLineBreak(cell)
     const tone = type === 'delta'
       ? (String(cell).trim().startsWith('-') ? 'down' : 'up')
       : deltaTone(cell)
     return (
-      <td key={j} className={numeric[j] || type === 'num' ? css.tdNum : undefined}>
+      <td
+        key={j}
+        className={[numeric[j] || type === 'num' ? css.tdNum : undefined, multiline ? css.tdMultiline : undefined]
+          .filter(part => part !== undefined)
+          .join(' ') || undefined}
+      >
         {type === 'badge'
           ? <span className={css.cellBadge}>{renderInline(String(cell), false)}</span>
           : type === 'bar'
@@ -340,7 +357,9 @@ export const TableNode = memo(function TableNode({ node, renderDetail, filterVal
             {columns.map((c, i) => (
               <th
                 key={i}
-                className={numeric[i] ? css.thNum : undefined}
+                className={[numeric[i] ? css.thNum : undefined, hasLineBreak(c) ? css.tdMultiline : undefined]
+                  .filter(part => part !== undefined)
+                  .join(' ') || undefined}
                 aria-sort={sort !== null && sort.col === i ? (sort.dir === 1 ? 'ascending' : 'descending') : 'none'}
               >
                 <button type="button" className={css.thSort} onClick={() => clickHeader(i)}>
@@ -359,7 +378,7 @@ export const TableNode = memo(function TableNode({ node, renderDetail, filterVal
               <Fragment key={section.header === null ? `s-${si}` : `g-${section.header.index}`}>
                 {section.header !== null && (
                   <tr className={css.groupRow}>
-                    <td colSpan={columns.length}>
+                    <td colSpan={columns.length} className={hasLineBreak(String(section.header.row[0])) ? css.tdMultiline : undefined}>
                       <button
                         type="button"
                         className={css.groupToggle}

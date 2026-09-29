@@ -628,6 +628,21 @@ img.mediaPlayer { aspect-ratio: 16 / 9; object-fit: cover; background: var(--dsl
 .tdDelta { font-weight: 600; }
 .tdDeltaUp { color: var(--dsw-alias-state-success-secondary, #1f9d63); }
 .tdDeltaDown { color: var(--dsw-alias-state-error-primary, #d94848); }
+/* A cell carrying real line breaks (a pasted code snippet, a multi-line note)
+   opts out of the `nowrap` data voice: `pre-wrap` keeps the line structure AND
+   the leading indentation — without it the browser collapses the spaces and a
+   copy/pasted snippet no longer runs. Single-line cells keep `nowrap`, so the
+   table still reads as a table. */
+.table th.tdMultiline,
+.table td.tdMultiline {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  vertical-align: top;
+}
+/* An inline code span keeps its own spacing too (a pasted snippet often lives
+   inside backticks), matching the block-level code surface. */
+.inlineCode { white-space: pre-wrap; }
 
 /* sortable header button (v2.9) */
 .thSort {
