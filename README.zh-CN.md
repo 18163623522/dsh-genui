@@ -96,7 +96,7 @@ CI 的 packed host smoke 会把实际生成的 npm tarball 安装到真实 DSH �
 
 前置条件，缺一不可：
 
-1. **dsh `^0.1.2-rc.1 || ^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1`**（验收宿主标签为 `dsh-v0.1.2-rc.1`、`dsh-v0.1.7-alpha.1` 与 `dsh-v0.1.7-alpha.2`；使用 DSH `<=0.1.1-rc.x` 的用户请使用 dsh-genui `0.9.8`）
+1. **dsh `^0.1.2-rc.1 || ^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || >=0.2.0-rc.1 <0.3.0-0`**（DSH `0.2.0-rc.1` 当前属于预发布版本；已验证宿主角色：minimum `dsh-v0.1.2-rc.1`、current `dsh-v0.1.7-rc.2`、next `dsh-v0.2.0-rc.1`；使用 DSH `<=0.1.1-rc.x` 的用户请使用 dsh-genui `0.9.8`）
 2. **`pnpm` 在 PATH 上**：`dsh plugin` 命令依赖它。没有就 `corepack enable`（或 `npm i -g pnpm`），然后**新开一个终端**，确认 `pnpm -v` 有输出
 
 安装并在 DSH 中激活（一行命令，自动带上全部依赖）：
@@ -253,7 +253,9 @@ pnpm run check   # 类型检查 + 全量测试 + 构建
 
 安装锁定依赖后，检查脚本（`pnpm run check` 或 `npm run check`）使用固定的 DSH `0.1.2-rc.1` 发布包。
 
-`pnpm run check:host-api dsh-v0.1.7-alpha.1` 与 `pnpm run check:host-api dsh-v0.1.7-alpha.2` 会在隔离目录安装对应的 DSH npm 发布包，运行 TypeScript 类型检查与 tsdown 构建。CI 对两个版本执行检查，然后运行安装包宿主 smoke 测试。
+已验证宿主角色为 minimum `dsh-v0.1.2-rc.1`、current `dsh-v0.1.7-rc.2`、next `dsh-v0.2.0-rc.1`。DSH `0.2.0-rc.1` 当前属于预发布版本。CI 保持四条主要 lane：Node 22 + current，以及 Node 24 + minimum/current/next。DSH 发布新版本后，替换对应固定标签。
+
+`pnpm run check:host-api dsh-v0.1.7-rc.2` 与 `pnpm run check:host-api dsh-v0.2.0-rc.1` 会安装对应 DSH 发布包，运行 TypeScript 类型检查与 tsdown 构建。每条 CI 宿主 lane 随后会把生成的 tarball 安装到固定版本的 DSH 宿主并运行 packed smoke。
 
 运行 `node scripts/verify-pack.mjs --keep` 可保留已验收的 tarball，便于检查或运行 e2e；默认的 `node scripts/verify-pack.mjs` 会在验收后清理临时目录。
 

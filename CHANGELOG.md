@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 兼容性
+
+- 支持 DSH `0.2.0-rc.1` / `0.2.x` 宿主（#227）。
+- 扩展 `@deepseek-ai/dsh-*` peerDependencies 至 `0.2.x`（#227）。
+- 将 CI 宿主兼容目标整理为 minimum / current / next（#227）。
+- 将 `dsh-v0.2.0-rc.1` 纳入 host API 与 packed host smoke 验证（#227）。
+
 ## [0.11.2] - 2026-09-28
 
 ### 新增
