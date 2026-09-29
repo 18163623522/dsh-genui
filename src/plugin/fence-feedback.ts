@@ -179,6 +179,11 @@ export function createFeedbackMessage(text: string, sessionFormatVersion: number
 interface SessionFeedback {
   /** Latest assistant reply text of the current turn. */
   text: string
+  /**
+   * Fingerprint of the last `dsh-ui` fence seen ONLY in a reasoning block of
+   * this turn (empty string when none). Ask for it in the body at the boundary.
+   */
+  reasoningFence: string
   /** Fence fingerprints already corrected in this process. */
   corrected: Set<string>
   /** Turn that already received its one correction. */
@@ -192,6 +197,14 @@ export interface FenceFeedbackPlanInput {
   readonly lastCorrectedTurn: number | undefined
   readonly corrected: ReadonlySet<string>
   readonly aborted: boolean
+  /**
+   * Fingerprint of a `dsh-ui` fence the model wrote ONLY in its reasoning
+   * block, leaving the reply body empty of fences. `agent/turn-stopping` is
+   * the last chance to ask for the fence where the reader can see it: the
+   * model composed the answer, validated it, then ended the turn with nothing
+   * in the message body, so no UI ever mounted.
+   */
+  readonly reasoningFence?: string | undefined
 }
 
 /** A correction the caller must account for before steering. */
@@ -212,7 +225,14 @@ export interface FenceFeedbackPlan {
 export function planFenceFeedback(input: FenceFeedbackPlanInput): FenceFeedbackPlan | null {
   if (input.aborted) return null
   if (input.lastCorrectedTurn === input.turn) return null
-  if (input.text.trim() === '') return null
+  const reasoningFence = input.reasoningFence
+  // The model composed the fence in its reasoning and never wrote it into the
+  // reply: nothing mounted, so ask for it in the body. Bounded by the same
+  // per-turn / per-fence accounting as a render failure.
+  if (input.text.trim() === '') {
+    if (reasoningFence === undefined || input.corrected.has(reasoningFence)) return null
+    return { text: missingBodyCorrectionText(reasoningFence), fingerprints: [reasoningFence], turn: input.turn }
+  }
   const failures = fenceFailures(input.text).filter(failure => !input.corrected.has(failure.fingerprint))
   if (failures.length === 0) return null
   return {
@@ -220,6 +240,16 @@ export function planFenceFeedback(input: FenceFeedbackPlanInput): FenceFeedbackP
     fingerprints: failures.map(failure => failure.fingerprint),
     turn: input.turn,
   }
+}
+
+/**
+ * Correction for "the fence is in the reasoning block only".
+ *
+ * @param fingerprint - fingerprint of that fence body.
+ * @returns the message text to steer into the running turn.
+ */
+export function missingBodyCorrectionText(fingerprint: string): string {
+  return `${MARKER_PREFIX}${fingerprint}]\n\n[genui-fence-repair]\nstatus=fence_in_reasoning_only\nfences=1\nnext=emit_fence_in_body\nrepeat_rendered_content=false\nreply_language=conversation\n\nreasoning 里的 \`\`\`dsh-ui 围栏不会渲染（用户看不到）；把同一份围栏原样写进**回答正文**再结束本轮，别再重复解释。\n`
 }
 
 /** Text of one assistant message's text blocks, in order. */
@@ -230,6 +260,19 @@ function textOfContent(content: unknown): string {
       if (typeof block !== 'object' || block === null) return ''
       const record = block as { type?: unknown; text?: unknown }
       return record.type === 'text' && typeof record.text === 'string' ? record.text : ''
+    })
+    .filter(part => part !== '')
+    .join('\n')
+}
+
+/** Text of one assistant message's reasoning blocks, in order. */
+function reasoningTextOfContent(content: unknown): string {
+  if (!Array.isArray(content)) return ''
+  return content
+    .map(block => {
+      if (typeof block !== 'object' || block === null) return ''
+      const record = block as { type?: unknown; text?: unknown }
+      return record.type === 'reasoning' && typeof record.text === 'string' ? record.text : ''
     })
     .filter(part => part !== '')
     .join('\n')
@@ -272,7 +315,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
   const stateOf = (sessionId: string): SessionFeedback => {
     let state = sessions.get(sessionId)
     if (state === undefined) {
-      state = { text: '', corrected: new Set(), lastCorrectedTurn: undefined }
+      state = { text: '', reasoningFence: '', corrected: new Set(), lastCorrectedTurn: undefined }
       sessions.set(sessionId, state)
     }
     return state
@@ -285,13 +328,22 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
   ctx.on('session/event', (session, event: SessionEvent) => {
     const sessionId = String(session.id)
     if (event.type === 'assistant/message') {
-      const text = textOfContent((event.data as { message?: { content?: unknown } }).message?.content)
-      if (extractDshUiFences(text).length === 0) {
-        const state = sessions.get(sessionId)
-        if (state !== undefined) state.text = ''
+      const content = (event.data as { message?: { content?: unknown } }).message?.content
+      const text = textOfContent(content)
+      const replyFences = extractDshUiFences(text)
+      if (replyFences.length > 0) {
+        const state = stateOf(sessionId)
+        state.text = text
+        state.reasoningFence = ''
         return
       }
-      stateOf(sessionId).text = text
+      // No fence in the body. If the reasoning block composed one, remember it:
+      // a turn that ends like this produced no visible UI at all.
+      const reasoning = reasoningTextOfContent(content)
+      const composed = extractDshUiFences(reasoning).filter(fence => fence.closed).at(-1)
+      const state = stateOf(sessionId)
+      state.text = ''
+      state.reasoningFence = composed === undefined ? '' : fenceFingerprint(composed.raw)
       return
     }
     if (event.type !== 'user/message') return
@@ -307,7 +359,10 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
     }
     // A genuine user prompt starts a new turn: the previous reply is settled.
     const state = sessions.get(sessionId)
-    if (state !== undefined) state.text = ''
+    if (state !== undefined) {
+      state.text = ''
+      state.reasoningFence = ''
+    }
   })
 
   ctx.on('agent/turn-stopping', ({ agent, turn, signal }): void => {
@@ -322,6 +377,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
       lastCorrectedTurn: state.lastCorrectedTurn,
       corrected: state.corrected,
       aborted: signal.aborted,
+      reasoningFence: state.reasoningFence === '' ? undefined : state.reasoningFence,
     })
     if (plan === null) return
     // Account BEFORE sending: a re-entrant boundary must not deliver twice.

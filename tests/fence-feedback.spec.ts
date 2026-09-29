@@ -210,6 +210,24 @@ describe('planFenceFeedback: the bounds that prevent a retry storm', () => {
     expect(planFenceFeedback({ ...base, text: reply(STAT_GROUP) })).toBeNull()
     expect(planFenceFeedback({ ...base, text: '   ' })).toBeNull()
   })
+
+  it('asks for the fence in the body when the reply only composed it in reasoning', () => {
+    // Real session (2026-09-29): the model validated a spec, wrote the whole
+    // fence into its reasoning block, and ended the turn with an empty body —
+    // nothing mounted and the reader saw only a collapsed "thinking" card.
+    const fingerprint = fenceFingerprint(BROKEN)
+    const plan = planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint })
+    expect(plan).not.toBeNull()
+    expect(plan!.fingerprints).toEqual([fingerprint])
+    expect(plan!.text).toContain('next=emit_fence_in_body')
+    expect(plan!.text).toContain('status=fence_in_reasoning_only')
+    // Same bounds as a render failure.
+    expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, lastCorrectedTurn: 1 })).toBeNull()
+    expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, corrected: new Set([fingerprint]) })).toBeNull()
+    expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, aborted: true })).toBeNull()
+    // An empty body with no composed fence stays silent.
+    expect(planFenceFeedback({ ...base, text: '' })).toBeNull()
+  })
 })
 
 describe('the steered correction message', () => {
@@ -274,6 +292,25 @@ describe('installFenceFeedback wiring', () => {
     expect(message.source.kind).toBe(FEEDBACK_SOURCE_KIND)
     // A second boundary of the same turn must not steer again.
     h.boundary({ agent, turn: 4, signal: new AbortController().signal })
+    expect(h.steer).toHaveBeenCalledTimes(1)
+  })
+
+  it('steers when the fence exists only in the reasoning block', () => {
+    const h = harness()
+    h.emitSession(userEvent())
+    h.emitSession({
+      type: 'assistant/message',
+      seq: 3,
+      time: 1,
+      data: { message: { content: [{ type: 'reasoning', text: reply(BROKEN) }] } },
+    } as unknown as SessionEvent)
+    const agent = { session: { id: 'sess-1', header: { id: 'sess-1', version: 4 } }, steer: h.steer }
+    h.boundary({ agent, turn: 7, signal: new AbortController().signal })
+    expect(h.steer).toHaveBeenCalledTimes(1)
+    const message = h.steer.mock.calls[0]![0] as { content: Array<{ text: string }> }
+    expect(message.content[0]!.text).toContain('next=emit_fence_in_body')
+    // One correction per turn even for this path.
+    h.boundary({ agent, turn: 7, signal: new AbortController().signal })
     expect(h.steer).toHaveBeenCalledTimes(1)
   })
 
