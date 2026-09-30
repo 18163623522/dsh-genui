@@ -137,6 +137,17 @@ describe('GenUI runtime schema normalization', () => {
     expect((processed.repaired?.items[0] as { details: unknown[][] }).details[0]).toEqual([{ type: 'select', id: 'choice', options: ['A', 'B'] }])
   })
 
+  it('leaves group-header details outside normalization and diagnostics', () => {
+    const raw = { items: [{
+      type: 'table', columns: ['区域', '数值'], types: ['group', 'num'], rows: [['华东', ''], ['上海', '120']],
+      details: [[{ type: 'select', id: 'hidden', items: ['A', 'B'], lable: '隐藏' }], null],
+    }] }
+    const normalized = normalizeGenuiSpec(raw)
+    expect((normalized.value as typeof raw).items[0]!.details![0]![0]).toMatchObject({ items: ['A', 'B'], lable: '隐藏' })
+    expect(normalized.warnings.some(warning => warning.path === 'items[0].details[0][0].items')).toBe(false)
+    expect(diagnoseUnknownGenuiFields(normalized.value).some(warning => warning.path === 'items[0].details[0][0].lable')).toBe(false)
+  })
+
   it('keeps canonical fields when an alias is also present', () => {
     const result = normalizeGenuiSpec({ items: [
       { type: 'card', title: 'canonical', label: 'legacy', items: [], content: [{ type: 'text', content: 'ignored' }] },

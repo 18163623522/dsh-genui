@@ -66,6 +66,33 @@ describe('submit submission members', () => {
     expect(actions).toEqual([['send', { type: 'submit', answers: {}, fields: { note: 'checked' }, total: 1, answered: 1 }]])
   })
 
+  it('does not expose group-header details as submission members', () => {
+    const actions: Action[] = []
+    const { container } = mount({ items: [
+      { type: 'table', columns: ['区域', '数值'], types: ['group', 'num'], rows: [['华东', ''], ['上海', '120']], details: [[{ type: 'input', id: 'region_note' }], null] },
+      { type: 'submit', label: '提交', action: 'send', groups: ['region_note'] },
+    ] }, actions)
+    expect(container.querySelector('input')).toBeNull()
+    expect(container.querySelector('button[class*="detailToggle"]')).toBeNull()
+    expect(submitUi(container).button.disabled).toBe(true)
+    expect(submitUi(container).hint).toContain('已选 0/1')
+    expect(actions).toEqual([])
+  })
+
+  it('does not register table details beyond the renderer row limit', () => {
+    const actions: Action[] = []
+    const rows = Array.from({ length: GENUI_LIMITS.maxTableRows + 1 }, (_unused, index) => [`row ${index}`])
+    const details = Array.from({ length: rows.length }, (_unused, index) => index === rows.length - 1 ? [{ type: 'input' as const, id: 'last_row' }] : null)
+    const { container } = mount({ items: [
+      { type: 'table', columns: ['Row'], rows, details },
+      { type: 'submit', label: '提交', action: 'send', groups: ['last_row'] },
+    ] }, actions)
+    expect(container.querySelector('input')).toBeNull()
+    expect(submitUi(container).button.disabled).toBe(true)
+    expect(submitUi(container).hint).toContain('已选 0/1')
+    expect(actions).toEqual([])
+  })
+
   it.each(['input', 'textarea'] as const)('%s requires a nonblank field value', type => {
     const actions: Action[] = []
     const { container } = mount({ items: [{ type, id: 'value' }, { type: 'submit', label: 'Send', action: 'send', groups: ['value'] }] }, actions)

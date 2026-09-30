@@ -99,6 +99,32 @@ describe('submission registry', () => {
     expect(validateGenuiSpec(unreachableDetail).errors).toContain('items[0].details must not contain more entries than rows')
     expect([...compileSubmissionRegistry(unreachableDetail).members.keys()]).not.toContain('ghost')
     expect(processGenuiSpec(unreachableDetail).errors).toContain('items[0].details must not contain more entries than rows')
+
+    const groupHeaderDetail = { items: [
+      { type: 'table', columns: ['区域', '数值'], types: ['group', 'num'], rows: [['华东', ''], ['上海', '120']], details: [[{ type: 'input', id: 'region_note' }], null] },
+      { type: 'submit', label: 'Send', action: 'send', groups: ['region_note'] },
+    ] } as GenuiSpec
+    expect([...compileSubmissionRegistry(groupHeaderDetail).members.keys()]).not.toContain('region_note')
+    expect(validateGenuiSpec(groupHeaderDetail).errors).toContain("items[1].groups[0]: submit.groups references unknown submission member 'region_note'")
+    expect(processGenuiSpec(groupHeaderDetail).errors).toContain("items[1].groups[0]: submit.groups references unknown submission member 'region_note'")
+    expect((processGenuiSpec(groupHeaderDetail).repaired?.items[0] as { details?: unknown }).details).toBeUndefined()
+
+    const headerlessDetail = { items: [
+      { type: 'table', rows: [['姓名'], ['Alice']], details: [null, [{ type: 'input', id: 'headerless_ghost' }]] },
+      { type: 'submit', label: 'Send', action: 'send', groups: ['headerless_ghost'] },
+    ] } as GenuiSpec
+    expect([...compileSubmissionRegistry(headerlessDetail).members.keys()]).not.toContain('headerless_ghost')
+    expect(validateGenuiSpec(headerlessDetail).errors).toContain('items[0].details must not contain more entries than rows')
+
+    const cappedRows = Array.from({ length: 51 }, (_unused, index) => [`row ${index}`])
+    const cappedDetails: Array<GenuiSpec['items'][number] | null> = Array.from({ length: 51 }, () => null)
+    cappedDetails[50] = { type: 'input', id: 'capped_ghost' }
+    const beyondRendererLimit = { items: [
+      { type: 'table', columns: ['Row'], rows: cappedRows, details: cappedDetails.map(detail => detail === null ? null : [detail]) },
+      { type: 'submit', label: 'Send', action: 'send', groups: ['capped_ghost'] },
+    ] } as GenuiSpec
+    expect([...compileSubmissionRegistry(beyondRendererLimit).members.keys()]).not.toContain('capped_ghost')
+    expect(validateGenuiSpec(beyondRendererLimit).errors).toContain('items[0].details must not contain more entries than rows')
   })
 
   it('uses the single answered rule for all member kinds', () => {

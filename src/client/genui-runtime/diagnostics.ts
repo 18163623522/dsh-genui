@@ -2,6 +2,7 @@
 import { COMPONENT_SCHEMAS, GENUI_SPEC_SCHEMA } from './schema.ts'
 import { isComponentRoot } from '../spec.ts'
 import type { ComponentRecordSchema, ComponentSchema } from './schema.ts'
+import { isTableDetailReachable } from '../table-details.ts'
 
 export interface GenuiDiagnostic {
   readonly kind: 'alias' | 'unknown-field'
@@ -48,9 +49,11 @@ function visitNativeNodes(value: unknown, path: string, visit: (node: Record<str
       if (holder?.items !== undefined && Array.isArray(holder.items)) holder.items.forEach((child, childIndex) => children(child, `${path}.items[${index}].items[${childIndex}]`))
     })
   } else if (type === 'table' && Array.isArray(value.details)) {
-    const rowCount = Array.isArray(value.rows) ? value.rows.length : 0
-    value.details.slice(0, rowCount).forEach((detail, rowIndex) => {
-      if (Array.isArray(detail)) detail.forEach((child, childIndex) => children(child, `${path}.details[${rowIndex}][${childIndex}]`))
+    const table = { columns: value.columns, rows: value.rows, types: value.types }
+    value.details.forEach((detail, rowIndex) => {
+      if (Array.isArray(detail) && isTableDetailReachable(table, rowIndex)) {
+        detail.forEach((child, childIndex) => children(child, `${path}.details[${rowIndex}][${childIndex}]`))
+      }
     })
   }
 }

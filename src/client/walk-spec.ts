@@ -1,5 +1,6 @@
 import type { GenuiNode, GenuiSpec } from './spec.ts'
 import { GENUI_LIMITS } from './genui-runtime/index.ts'
+import { isTableDetailReachable, tableRowsForDetails } from './table-details.ts'
 
 /** 遍历完整 GenUI 组件树，并提供每个组件在 spec 中的路径。 */
 export function walkGenuiNodes(spec: GenuiSpec, visitor: (node: GenuiNode, path: string) => void): void {
@@ -30,8 +31,10 @@ export function walkGenuiNodes(spec: GenuiSpec, visitor: (node: GenuiNode, path:
         })
         break
       case 'table':
-        node.details?.slice(0, node.rows.length).forEach((detail, rowIndex) => {
-          if (detail !== null) walk(detail, `${at}.details[${rowIndex}]`, depth + 1)
+        node.details?.slice(0, tableRowsForDetails(node).length).forEach((detail, rowIndex) => {
+          if (detail !== null && isTableDetailReachable(node, rowIndex)) {
+            walk(detail, `${at}.details[${rowIndex}]`, depth + 1)
+          }
         })
         break
     }

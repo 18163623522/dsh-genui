@@ -3,6 +3,7 @@ import { COMPONENT_SCHEMAS } from './schema.ts'
 import type { ComponentRecordSchema } from './schema.ts'
 import { isComponentRoot } from '../spec.ts'
 import type { GenuiDiagnostic } from './diagnostics.ts'
+import { isTableDetailReachable } from '../table-details.ts'
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -250,9 +251,9 @@ function normalizeNode(value: unknown, path: string, warnings: GenuiDiagnostic[]
       return { ...holder, items: Array.isArray(holder.items) ? holder.items.map((child, childIndex) => normalizeNodeValue(child, `${path}.items[${index}].items[${childIndex}]`)) : holder.items }
     })
   } else if (type === 'table' && Array.isArray(out.details)) {
-    const rowCount = Array.isArray(out.rows) ? out.rows.length : 0
+    const table = { columns: out.columns, rows: out.rows, types: out.types }
     out.details = out.details.map((detail, rowIndex) => {
-      if (rowIndex >= rowCount || !Array.isArray(detail)) return detail
+      if (!Array.isArray(detail) || !isTableDetailReachable(table, rowIndex)) return detail
       return detail.map((child, childIndex) => normalizeNodeValue(child, `${path}.details[${rowIndex}][${childIndex}]`))
     })
   }

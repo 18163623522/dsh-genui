@@ -32,6 +32,7 @@ import { diagnoseUnknownGenuiFields } from './genui-runtime/diagnostics.ts'
 import type { GenuiDiagnostic } from './genui-runtime/diagnostics.ts'
 import { GENUI_LIMITS } from './genui-runtime/limits.ts'
 import { analyzeSubmissionRegistry } from './submission-registry.ts'
+import { isTableDetailReachable, tableRowsForDetails } from './table-details.ts'
 import { color, enu, int, num, obj, opt, safeHref, safeMediaSrc, str } from './genui-runtime/value-utils.ts'
 
 /** Result of `validateGenuiSpec`. */
@@ -471,6 +472,7 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
       const details = rawDetails === undefined
         ? undefined
         : rows.map((_row, i) => {
+          if (!isTableDetailReachable({ columns, rows, types }, i)) return null
           const entry = repairItems(rawDetails[i], ctx, depth + 1)
           return entry.length === 0 ? null : entry
         })
@@ -1375,10 +1377,11 @@ export function countGenuiNodes(value: unknown, cap = Number.POSITIVE_INFINITY):
           if (lo !== undefined && typeof lo.type === 'string') walk([lo])
         }
       } else if (v.type === 'table' && Array.isArray(v.details)) {
-        const rowCount = Array.isArray(v.rows) ? v.rows.length : 0
-        for (const detail of v.details.slice(0, rowCount)) {
+        const rowCount = tableRowsForDetails(v).length
+        for (let rowIndex = 0; rowIndex < Math.min(v.details.length, rowCount); rowIndex++) {
           if (count >= cap) return
-          if (Array.isArray(detail)) walk(detail)
+          const detail = v.details[rowIndex]
+          if (Array.isArray(detail) && isTableDetailReachable(v, rowIndex)) walk(detail)
         }
       }
     }
@@ -1437,9 +1440,9 @@ function visitDeclaredGenuiNodes(
         walkNode(v.items[row], `${at}.items[${row}]`)
       }
     } else if (v.type === 'table' && Array.isArray(v.details)) {
-      const rowCount = Array.isArray(v.rows) ? v.rows.length : 0
+      const rowCount = tableRowsForDetails(v).length
       for (let row = 0; row < Math.min(v.details.length, rowCount); row++) {
-        if (Array.isArray(v.details[row])) walk(v.details[row], `${at}.details[${row}]`)
+        if (Array.isArray(v.details[row]) && isTableDetailReachable(v, row)) walk(v.details[row], `${at}.details[${row}]`)
       }
     }
   }
@@ -1932,11 +1935,12 @@ function validateNode(value: unknown, depth: number, at: string, errors: string[
         errors.push(`${at}.details must be an array aligned with rows`)
       }
       if (Array.isArray(v.details)) {
-        const rowCount = Array.isArray(v.rows) ? v.rows.length : 0
+        const table = { columns: v.columns, rows: v.rows, types: v.types }
+        const rowCount = tableRowsForDetails(table).length
         if (v.details.length > rowCount) errors.push(`${at}.details must not contain more entries than rows`)
         for (let i = 0; i < Math.min(v.details.length, rowCount); i++) {
           const detail = v.details[i]
-          if (detail === null) continue
+          if (detail === null || !isTableDetailReachable(table, i)) continue
           if (!Array.isArray(detail)) {
             errors.push(`${at}.details[${i}] must be an array or null`)
             continue
