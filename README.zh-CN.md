@@ -163,7 +163,8 @@ dsh plugin --profile web add link:$PWD
 - **ECharts 集成**：`echart` 节点渲染完整的 ECharts 图表，自动适配主题色、提示框和图例。两种模式：**预设简写**（`preset: 'bar' | 'line' | 'area' | 'pie' | 'scatter'` + `data`/`series`）可从 `chart` 节点快速升级；**完整选项**（`option` 字段）支持自定义图表类型、dataZoom、visualMap 等高级 ECharts 功能。echarts 引擎（~1 MB）按需懒加载——主包不含引擎，没有 `echart` 节点的对话不会下载它- **函数图**：`plot` 画曲线，参数滑块拖动实时重绘，支持自动动画
 
 - **测验**：`quiz` 点选判题 + 解析 + 重试；带 `action` 时答案同时回传模型（判题仍本地即时）
-- **本地判卷（交卷）**：多道选择题 = 每题的 `radio` 加 `group` + `answer`（正确答案）+ `explanation`（解析），再加一个 `submit` 交卷按钮——用户全部选完点一次，**分数、每题对错、解析当场在 UI 里出现，零模型往返**；题目随即锁定，「重新作答」本地重置（可选 `resetAction` 通知模型）。题目没带答案时才退回聚合 action（`fields` 收集所有带 `id` 的输入）
+- **本地判卷（交卷）**：多道选择题的每个 `radio` 设置 `group`、`answer` 和 `explanation`，再添加 `submit` 按钮。所需 radio 均已选择且当前 block 没有其他需要发送的表单状态时，分数、每题对错和解析直接显示在界面中；其他情况通过聚合 action 发送 `answers`、可选的 `fields`、`total` 和 `answered`。
+- **提交分组**：`groups` 引用当前 block 中的 submission member key，来源为 `radio.group`、`checkbox.group`、`input.id`、`textarea.id`、`select.id`、`slider.id`。radio 需已选择，checkbox 组需至少选择一项，普通字段需在 trim 后非空。`groups` 控制提交所需成员与完成进度；payload 继续收集当前 block 中已填写的表单状态。未设置 `groups` 时，至少有一个已完成成员即可提交。
 - **状态持久化**：答案、交卷锁定、输入值按「会话 + 内容指纹」自动保存——刷新页面/重开会话原样恢复，重渲染相同内容保留用户状态，新内容自动从头开始；上限 200 块 LRU 淘汰
 - **表单语义**：`input` 回车 / `textarea` Ctrl+Enter 即时提交（`submit:true`），不用等失焦；带 `id` 的字段值进 submit 的 `fields` 收集
 - **秘密禁令**：GenUI 不得索取密码、API Key、访问令牌、恢复码或其他秘密；密码输入即使出现也保持打码、不持久化、不进表单收集

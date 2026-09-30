@@ -185,9 +185,10 @@ describe('checkbox group aggregation', () => {
       { type: 'submit', label: '保存附加项', action: 'save', groups: ['extras'] },
     ] }
     const ui = renderWithActions(spec, actions)
-    fireEvent.click(ui.getByLabelText('附加项'))
     fireEvent.click(ui.container.querySelector('input[type="radio"]')!)
     fireEvent.click(ui.getByRole('button', { name: '交卷' }))
+    expect(ui.container.querySelector('[data-genui-grade]')).not.toBeNull()
+    fireEvent.click(ui.getByLabelText('附加项'))
     fireEvent.click(ui.getAllByRole('button', { name: '重新作答' })[0]!)
     expect((ui.getByLabelText('附加项') as HTMLInputElement).checked).toBe(false)
     expect((ui.getByRole('button', { name: '保存附加项' }) as HTMLButtonElement).disabled).toBe(true)
