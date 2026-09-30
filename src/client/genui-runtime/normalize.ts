@@ -249,6 +249,12 @@ function normalizeNode(value: unknown, path: string, warnings: GenuiDiagnostic[]
       if (holder === undefined) return item
       return { ...holder, items: Array.isArray(holder.items) ? holder.items.map((child, childIndex) => normalizeNodeValue(child, `${path}.items[${index}].items[${childIndex}]`)) : holder.items }
     })
+  } else if (type === 'table' && Array.isArray(out.details)) {
+    const rowCount = Array.isArray(out.rows) ? out.rows.length : 0
+    out.details = out.details.map((detail, rowIndex) => {
+      if (rowIndex >= rowCount || !Array.isArray(detail)) return detail
+      return detail.map((child, childIndex) => normalizeNodeValue(child, `${path}.details[${rowIndex}][${childIndex}]`))
+    })
   }
   return out
 }

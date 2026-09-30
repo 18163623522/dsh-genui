@@ -121,6 +121,22 @@ describe('GenUI runtime schema normalization', () => {
     ])
   })
 
+  it('normalizes aliases inside renderer-reachable table details before submission validation', () => {
+    const raw = { items: [
+      { type: 'table', columns: ['项目'], rows: [['A']], details: [[{ type: 'select', id: 'choice', items: ['A', 'B'] }]] },
+      { type: 'submit', label: '提交', action: 'send', groups: ['choice'] },
+    ] }
+    const normalized = normalizeGenuiSpec(raw)
+    expect(normalized.value).toEqual({ items: [
+      { type: 'table', columns: ['项目'], rows: [['A']], details: [[{ type: 'select', id: 'choice', options: ['A', 'B'] }]] },
+      { type: 'submit', label: '提交', action: 'send', groups: ['choice'] },
+    ] })
+    expect(normalized.warnings).toContainEqual(expect.objectContaining({ path: 'items[0].details[0][0].items', canonical: 'options' }))
+    const processed = processGenuiSpec(raw)
+    expect(processed.errors).toEqual([])
+    expect((processed.repaired?.items[0] as { details: unknown[][] }).details[0]).toEqual([{ type: 'select', id: 'choice', options: ['A', 'B'] }])
+  })
+
   it('keeps canonical fields when an alias is also present', () => {
     const result = normalizeGenuiSpec({ items: [
       { type: 'card', title: 'canonical', label: 'legacy', items: [], content: [{ type: 'text', content: 'ignored' }] },
@@ -201,6 +217,17 @@ describe('GenUI runtime schema normalization', () => {
     expect(result.warnings.some(warning => warning.path === 'items[0].typo')).toBe(true)
     expect(result.warnings.some(warning => warning.path.includes('items[1]'))).toBe(false)
     expect(result.repaired?.items[1]).toEqual({ type: 'custom-widget', typo: true })
+  })
+
+  it('warns about unknown fields inside renderer-reachable table details', () => {
+    const warnings = diagnoseUnknownGenuiFields({ items: [
+      { type: 'table', columns: ['项目'], rows: [['A']], details: [[{ type: 'input', lable: '姓名' }]] },
+    ] })
+    expect(warnings).toContainEqual(expect.objectContaining({
+      kind: 'unknown-field',
+      path: 'items[0].details[0][0].lable',
+      type: 'input',
+    }))
   })
 
   it('diagnoses root and nested native record typos without inspecting custom payloads', () => {

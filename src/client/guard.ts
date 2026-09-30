@@ -1375,7 +1375,8 @@ export function countGenuiNodes(value: unknown, cap = Number.POSITIVE_INFINITY):
           if (lo !== undefined && typeof lo.type === 'string') walk([lo])
         }
       } else if (v.type === 'table' && Array.isArray(v.details)) {
-        for (const detail of v.details) {
+        const rowCount = Array.isArray(v.rows) ? v.rows.length : 0
+        for (const detail of v.details.slice(0, rowCount)) {
           if (count >= cap) return
           if (Array.isArray(detail)) walk(detail)
         }
@@ -1436,7 +1437,8 @@ function visitDeclaredGenuiNodes(
         walkNode(v.items[row], `${at}.items[${row}]`)
       }
     } else if (v.type === 'table' && Array.isArray(v.details)) {
-      for (let row = 0; row < v.details.length; row++) {
+      const rowCount = Array.isArray(v.rows) ? v.rows.length : 0
+      for (let row = 0; row < Math.min(v.details.length, rowCount); row++) {
         if (Array.isArray(v.details[row])) walk(v.details[row], `${at}.details[${row}]`)
       }
     }
@@ -1930,7 +1932,9 @@ function validateNode(value: unknown, depth: number, at: string, errors: string[
         errors.push(`${at}.details must be an array aligned with rows`)
       }
       if (Array.isArray(v.details)) {
-        for (let i = 0; i < v.details.length; i++) {
+        const rowCount = Array.isArray(v.rows) ? v.rows.length : 0
+        if (v.details.length > rowCount) errors.push(`${at}.details must not contain more entries than rows`)
+        for (let i = 0; i < Math.min(v.details.length, rowCount); i++) {
           const detail = v.details[i]
           if (detail === null) continue
           if (!Array.isArray(detail)) {

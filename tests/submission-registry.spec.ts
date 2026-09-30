@@ -91,6 +91,14 @@ describe('submission registry', () => {
       { type: 'tabs', tabs: [{ label: 'T', items: [{ type: 'input', id: 'key' }] }] },
       { type: 'accordion', items: [{ title: 'A', items: [{ type: 'radio', group: 'key', options: ['A'] }] }] },
     ] }).errors.some(error => error.includes('items[1].items[0].items[0].group conflicts with items[0].tabs[0].items[0].id'))).toBe(true)
+
+    const unreachableDetail = { items: [
+      { type: 'table', columns: ['A'], rows: [['1']], details: [null, [{ type: 'input', id: 'ghost' }]] },
+      { type: 'submit', label: 'Send', action: 'send', groups: ['ghost'] },
+    ] }
+    expect(validateGenuiSpec(unreachableDetail).errors).toContain('items[0].details must not contain more entries than rows')
+    expect([...compileSubmissionRegistry(unreachableDetail).members.keys()]).not.toContain('ghost')
+    expect(processGenuiSpec(unreachableDetail).errors).toContain('items[0].details must not contain more entries than rows')
   })
 
   it('uses the single answered rule for all member kinds', () => {

@@ -30,7 +30,7 @@ export function walkGenuiNodes(spec: GenuiSpec, visitor: (node: GenuiNode, path:
         })
         break
       case 'table':
-        node.details?.forEach((detail, rowIndex) => {
+        node.details?.slice(0, node.rows.length).forEach((detail, rowIndex) => {
           if (detail !== null) walk(detail, `${at}.details[${rowIndex}]`, depth + 1)
         })
         break

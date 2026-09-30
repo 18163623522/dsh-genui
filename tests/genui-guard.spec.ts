@@ -311,6 +311,16 @@ describe('node counting: container descent + declared nodes (issue #42)', () => 
     expect(countDeclaredGenuiNodes(tree)).toBe(3)
     expect(validateGenuiSpec(tree).ok).toBe(true)
   })
+
+  it('ignores table details beyond the rendered row count and reports the mismatch', () => {
+    const tree = { items: [
+      { type: 'table', columns: ['A'], rows: [['1']], details: [null, [{ type: 'input', id: 'ghost' }]] },
+      { type: 'submit', label: 'Send', action: 'send', groups: ['ghost'] },
+    ] }
+    expect(countGenuiNodes(tree)).toBe(2)
+    expect(countDeclaredGenuiNodes(tree)).toBe(2)
+    expect(validateGenuiSpec(tree).errors).toContain('items[0].details must not contain more entries than rows')
+  })
 })
 
 describe('repairGenuiSpec: list nodes', () => {

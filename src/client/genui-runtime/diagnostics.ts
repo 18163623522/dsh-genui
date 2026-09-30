@@ -47,6 +47,11 @@ function visitNativeNodes(value: unknown, path: string, visit: (node: Record<str
       const holder = record(item)
       if (holder?.items !== undefined && Array.isArray(holder.items)) holder.items.forEach((child, childIndex) => children(child, `${path}.items[${index}].items[${childIndex}]`))
     })
+  } else if (type === 'table' && Array.isArray(value.details)) {
+    const rowCount = Array.isArray(value.rows) ? value.rows.length : 0
+    value.details.slice(0, rowCount).forEach((detail, rowIndex) => {
+      if (Array.isArray(detail)) detail.forEach((child, childIndex) => children(child, `${path}.details[${rowIndex}][${childIndex}]`))
+    })
   }
 }
 
