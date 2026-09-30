@@ -175,6 +175,22 @@ describe('submit submission members', () => {
     expect(actions).toEqual([])
   })
 
+  it('keeps local grading available after an out-of-scope checkbox is cleared', () => {
+    const actions: Action[] = []
+    const { container } = mount({ items: [
+      { type: 'radio', group: 'q1', label: 'Question', options: ['A', 'B'], answer: 1 },
+      { type: 'checkbox', group: 'extras', label: 'Extra' },
+      { type: 'submit', label: 'Grade', groups: ['q1'] },
+    ] }, actions)
+    fireEvent.click(container.querySelectorAll('[type="radio"]')[1]!)
+    fireEvent.click(container.querySelector('[type="checkbox"]')!)
+    fireEvent.click(container.querySelector('[type="checkbox"]')!)
+    expect(submitUi(container).button.disabled).toBe(false)
+    fireEvent.click(submitUi(container).button)
+    expect(container.querySelector('[data-genui-grade]')?.textContent).toContain('1 / 1')
+    expect(actions).toEqual([])
+  })
+
   it('keeps a repaired submit with an unknown group mounted and disabled', () => {
     const actions: Action[] = []
     const spec = repairGenuiSpec({ items: [

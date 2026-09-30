@@ -40,7 +40,8 @@ export interface ResolvedSubmitState {
   scope: SubmissionMember[]
   answered: number
   total: number
-  canGradeLocally: boolean
+  localGradeEligible: boolean
+  hasOutOfScopePayload: boolean
 }
 
 /** 从 spec 建立成员表，并诊断 submission key 和 submit.groups。 */
@@ -140,11 +141,10 @@ export function resolveSubmitState({ registry, groups, state }: {
   const total = groups?.length ?? scope.length
   const scopeKeys = new Set(scope.map(member => member.key))
   const hasOutOfScopePayload = Object.keys(state.answers).some(key => !scopeKeys.has(key))
-    || Object.keys(state.multiAnswers).length > 0
-    || Object.entries(state.fields).some(([key, value]) => value.trim() !== '' && !state.secretFields.has(key))
-  const canGradeLocally = !hasUnknownMember && scope.length > 0
+    || Object.keys(state.multiAnswers).some(key => !scopeKeys.has(key))
+    || Object.entries(state.fields).some(([key, value]) => value.trim() !== '' && !state.secretFields.has(key) && !scopeKeys.has(key))
+  const localGradeEligible = !hasUnknownMember && scope.length > 0
     && scope.every(member => member.kind === 'radio')
     && scope.some(member => member.kind === 'radio' && member.answer !== undefined)
-    && !hasOutOfScopePayload
-  return { scope, answered, total, canGradeLocally }
+  return { scope, answered, total, localGradeEligible, hasOutOfScopePayload }
 }

@@ -93,13 +93,15 @@ export function SubmitNode({ node, onAction, answers }: {
   const filledFields = Object.fromEntries(
     Object.entries(fields).filter(([id, v]) => v.trim() !== '' && !answers?.secretFields.has(id)),
   )
-  const resolved = answers === undefined ? { scope: [], answered: 0, total: expected?.length ?? 0, canGradeLocally: false }
+  const resolved = answers === undefined ? { scope: [], answered: 0, total: expected?.length ?? 0, localGradeEligible: false, hasOutOfScopePayload: false }
     : resolveSubmitState({
       registry: answers.registry,
       ...(expected === undefined ? {} : { groups: expected }),
       state: { answers: recorded, multiAnswers: multiRecorded, fields, secretFields: answers.secretFields },
     })
-  const { scope, answered, total, canGradeLocally } = resolved
+  const { scope, answered, total } = resolved
+  const canSendAction = node.action !== undefined && onAction !== undefined
+  const shouldGradeLocally = resolved.localGradeEligible && (!resolved.hasOutOfScopePayload || !canSendAction)
   const submitted = answers?.locked === true
   const collectedAnswers: Record<string, string | string[]> = {
     ...recorded,
@@ -109,7 +111,7 @@ export function SubmitNode({ node, onAction, answers }: {
   // grading, or a real action name + provider. A submit with neither is a
   // display-only control — honest disabled affordance.
   const ready = answered > 0 && answered >= total
-    && (canGradeLocally || (node.action !== undefined && onAction !== undefined))
+    && (shouldGradeLocally || canSendAction)
 
   if (submitted) {
     // ── local grading result ──
@@ -172,7 +174,7 @@ export function SubmitNode({ node, onAction, answers }: {
         className={`${css.button} ${css.primary} ${css.submit}`}
         disabled={!ready}
         onClick={ready ? () => {
-          if (canGradeLocally) {
+          if (shouldGradeLocally) {
             // Local grading: immediate in-place result, no model round trip.
             answers?.setLocked(true)
           } else if (node.action !== undefined && onAction !== undefined) {
