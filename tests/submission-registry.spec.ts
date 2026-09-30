@@ -116,6 +116,29 @@ describe('submission registry', () => {
     expect([...compileSubmissionRegistry(headerlessDetail).members.keys()]).not.toContain('headerless_ghost')
     expect(validateGenuiSpec(headerlessDetail).errors).toContain('items[0].details must not contain more entries than rows')
 
+    const overwideHeaderDetail = { items: [
+      { type: 'table', rows: [
+        ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7', 'h8', 'h9', 'h10', 'h11', 'h12', 'extra'],
+        ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'],
+      ], details: [null, [{ type: 'input', id: 'wide_ghost' }]] },
+      { type: 'submit', label: 'Send', action: 'send', groups: ['wide_ghost'] },
+    ] } as GenuiSpec
+    expect([...compileSubmissionRegistry(overwideHeaderDetail).members.keys()]).not.toContain('wide_ghost')
+    expect(validateGenuiSpec(overwideHeaderDetail).errors).toContain('items[0].details must not contain more entries than rows')
+    expect(processGenuiSpec(overwideHeaderDetail).errors).toContain('items[0].details must not contain more entries than rows')
+    expect((processGenuiSpec(overwideHeaderDetail).repaired?.items[0] as { rows: unknown[] }).rows).toHaveLength(1)
+
+    const objectGroupHeaderDetail = { items: [
+      {
+        type: 'table', columns: [{ title: '区域', key: 'region' }, { title: '数值', key: 'value' }], types: ['group', 'num'],
+        rows: [{ region: '华东', value: '' }, { region: '上海', value: '120' }],
+        details: [[{ type: 'input', id: 'object_header_ghost' }], null],
+      },
+      { type: 'submit', label: 'Send', action: 'send', groups: ['object_header_ghost'] },
+    ] } as GenuiSpec
+    expect([...compileSubmissionRegistry(objectGroupHeaderDetail).members.keys()]).not.toContain('object_header_ghost')
+    expect(validateGenuiSpec(objectGroupHeaderDetail).errors).toContain("items[1].groups[0]: submit.groups references unknown submission member 'object_header_ghost'")
+
     const cappedRows = Array.from({ length: 51 }, (_unused, index) => [`row ${index}`])
     const cappedDetails: Array<GenuiSpec['items'][number] | null> = Array.from({ length: 51 }, () => null)
     cappedDetails[50] = { type: 'input', id: 'capped_ghost' }
