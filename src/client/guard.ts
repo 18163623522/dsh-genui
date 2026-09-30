@@ -32,6 +32,7 @@ import { diagnoseUnknownGenuiFields } from './genui-runtime/diagnostics.ts'
 import type { GenuiDiagnostic } from './genui-runtime/diagnostics.ts'
 import { GENUI_LIMITS } from './genui-runtime/limits.ts'
 import { analyzeSubmissionRegistry } from './submission-registry.ts'
+import { isTableDetailReachable, prepareTableRows, tableRowsForDetails } from './table-details.ts'
 import { color, enu, int, num, obj, opt, safeHref, safeMediaSrc, str } from './genui-runtime/value-utils.ts'
 
 /** Result of `validateGenuiSpec`. */
@@ -419,41 +420,9 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
       return { type: 'list', items, ...opt('filter', str(v.filter, 64)) }
     }
     case 'table': {
-      let rawCols = v.columns as unknown
-      let rawRows = v.rows !== undefined ? v.rows : (v as Record<string, unknown>).data
-      // Self-heal model-shaped tables: antd-style object columns
-      // ({title,key}) become header strings, and object-array rows (or a
-      // `data` alias) flatten to 2D rows keyed by the column keys — without
-      // this the whole node is dropped for "missing 2D rows" and the user
-      // sees nothing (issue #42).
-      if (Array.isArray(rawCols) && rawCols.length > 0 && typeof rawCols[0] === 'object' && rawCols[0] !== null) {
-        rawCols = rawCols.map(c => columnHeaderText(c))
-      }
-      if (Array.isArray(rawRows) && rawRows.length > 0 && typeof rawRows[0] === 'object' && rawRows[0] !== null && !Array.isArray(rawRows[0])) {
-        const keys = Array.isArray(v.columns) && v.columns.length > 0 && typeof v.columns[0] === 'object' && v.columns[0] !== null
-          ? v.columns.map(c => columnKeyOf(c)).filter((k): k is string => k !== undefined)
-          : Object.keys(rawRows[0] as Record<string, unknown>)
-        rawRows = rawRows.map(row => keys.map(k => cellText((row as Record<string, unknown>)[k])))
-      }
-      // Headerless rows: a 2D `rows`/`data` array with no `columns` states its
-      // own column names in its leading row, so derive them instead of
-      // dropping the node (and with it, the whole fence). A derivation the
-      // cell repair cannot reproduce (malformed cells) falls through to the
-      // existing drop-and-report behaviour.
-      let derived: { columns: string[]; rows: Array<Array<string | number>> } | null = null
-      if ((!Array.isArray(rawCols) || rawCols.length === 0)
-        && Array.isArray(rawRows) && rawRows.length > 0 && Array.isArray(rawRows[0])) {
-        const grid = repairRows(rawRows, GENUI_LIMITS.maxTableRows, GENUI_LIMITS.maxTableCols)
-        const candidate = grid === undefined || grid.length === 0 ? null : deriveTableColumns(grid)
-        if (candidate !== null
-          && repairRows(candidate.rows, GENUI_LIMITS.maxTableRows, GENUI_LIMITS.maxTableCols)?.length === candidate.rows.length) {
-          derived = candidate
-          rawCols = candidate.columns
-        }
-      }
-      const columns = repairStrings(rawCols, GENUI_LIMITS.maxTableCols, 128)
-      const rows = repairRows(derived === null ? rawRows : derived.rows, GENUI_LIMITS.maxTableRows, GENUI_LIMITS.maxTableCols)
-      if (columns === undefined || rows === undefined) return null
+      const prepared = prepareTableRows(v)
+      if (prepared === null) return null
+      const { columns, rows } = prepared
       // Optional per-column cell types; unknown entries degrade to 'text'.
       const rawTypes = Array.isArray(v.types) ? v.types : undefined
       const types = rawTypes === undefined
@@ -471,6 +440,7 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
       const details = rawDetails === undefined
         ? undefined
         : rows.map((_row, i) => {
+          if (!isTableDetailReachable({ columns, rows, types }, i)) return null
           const entry = repairItems(rawDetails[i], ctx, depth + 1)
           return entry.length === 0 ? null : entry
         })
@@ -777,53 +747,6 @@ function repairListItems(
   return out
 }
 
-function repairRows(v: unknown, rowCap: number, colCap: number): Array<Array<string | number>> | undefined {
-  if (!Array.isArray(v)) return undefined
-  const out: Array<Array<string | number>> = []
-  for (const row of v) {
-    if (out.length >= rowCap) break
-    if (!Array.isArray(row)) continue
-    const cells: Array<string | number> = []
-    for (const cell of row) {
-      if (cells.length >= colCap) break
-      if (typeof cell === 'string') cells.push(cell.slice(0, 256))
-      else if (typeof cell === 'number' && Number.isFinite(cell)) cells.push(cell)
-    }
-    if (cells.length > 0) out.push(cells)
-  }
-  return out
-}
-
-/** Left-aligned, undecorated columns for a table whose rows came without one. */
-function derivedColumnNames(count: number): string[] {
-  return Array.from({ length: count }, (_unused, index) => `列${index + 1}`)
-}
-
-/**
- * Derive `columns` for a table that shipped only rows, without inventing
- * content: the leading cell array is adopted as the header row and removed
- * from the body — the shape both JSON table dumps and DataFrame-shaped
- * exports are meant to be read as. Returns null when no unambiguous
- * derivation exists (ragged rows) so the caller keeps its existing
- * drop-and-report behaviour instead of rendering a fabricated header.
- */
-function deriveTableColumns(rows: Array<Array<string | number>>): { columns: string[]; rows: Array<Array<string | number>> } | null {
-  const header = rows[0]
-  if (header === undefined || header.length === 0) return null
-  const body = rows.slice(1)
-  if (body.length === 0) {
-    // Header-only capture (a model dumping just its result header): render the
-    // stated columns with an empty body rather than fabricating a header row.
-    const columns = header.map(cell => String(cell).trim())
-    return columns.every(column => column !== '') ? { columns, rows: [] } : null
-  }
-  if (body.every(row => row.length === header.length)) {
-    return { columns: header.map(cell => String(cell).trim()), rows: body }
-  }
-  // Ragged body: nothing states the column names, so the leading row is data.
-  return { columns: derivedColumnNames(header.length), rows }
-}
-
 function repairChartData(v: unknown, cap: number): Array<{ label: string; value: number; color?: string }> | undefined {
   if (!Array.isArray(v)) return undefined
   const out: Array<{ label: string; value: number; color?: string }> = []
@@ -868,38 +791,6 @@ function repairTabs(v: unknown, ctx: RepairCtx, depth: number): Array<{ label: s
     out.push({ label, items: repairItems(rawItems, ctx, depth + 1) })
   }
   return out
-}
-
-/** Header text for an object-shaped table column ({title,key} antd style). */
-function columnHeaderText(c: unknown): string {
-  const o = obj(c)
-  if (o === undefined) return String(c)
-  for (const k of ['title', 'label', 'key', 'dataIndex'] as const) {
-    const s = o[k]
-    if (typeof s === 'string' && s !== '') return s
-  }
-  return JSON.stringify(c)
-}
-
-/** Row key for an object-shaped column, mirroring columnHeaderText's order. */
-function columnKeyOf(c: unknown): string | undefined {
-  const o = obj(c)
-  if (o === undefined) return undefined
-  for (const k of ['key', 'dataIndex', 'title', 'label'] as const) {
-    const s = o[k]
-    if (typeof s === 'string' && s !== '') return s
-  }
-  return undefined
-}
-
-/** Cell text for object-array rows: strings/finite numbers pass through,
- * everything else stringifies so the column alignment is preserved
- * (repairRows would drop null/undefined cells and shift the row). */
-function cellText(v: unknown): string | number {
-  if (typeof v === 'string') return v
-  if (typeof v === 'number' && Number.isFinite(v)) return v
-  if (v === null || v === undefined) return ''
-  return JSON.stringify(v)
 }
 
 function repairPlotSeries(v: unknown, cap: number): GenuiPlot['series'] | undefined {
@@ -1374,6 +1265,13 @@ export function countGenuiNodes(value: unknown, cap = Number.POSITIVE_INFINITY):
           const lo = obj(li)
           if (lo !== undefined && typeof lo.type === 'string') walk([lo])
         }
+      } else if (v.type === 'table' && Array.isArray(v.details)) {
+        const rowCount = tableRowsForDetails(v).length
+        for (let rowIndex = 0; rowIndex < Math.min(v.details.length, rowCount); rowIndex++) {
+          if (count >= cap) return
+          const detail = v.details[rowIndex]
+          if (Array.isArray(detail) && isTableDetailReachable(v, rowIndex)) walk(detail)
+        }
       }
     }
   }
@@ -1429,6 +1327,11 @@ function visitDeclaredGenuiNodes(
     } else if (v.type === 'list' && Array.isArray(v.items)) {
       for (let row = 0; row < v.items.length; row++) {
         walkNode(v.items[row], `${at}.items[${row}]`)
+      }
+    } else if (v.type === 'table' && Array.isArray(v.details)) {
+      const rowCount = tableRowsForDetails(v).length
+      for (let row = 0; row < Math.min(v.details.length, rowCount); row++) {
+        if (Array.isArray(v.details[row]) && isTableDetailReachable(v, row)) walk(v.details[row], `${at}.details[${row}]`)
       }
     }
   }
@@ -1589,6 +1492,9 @@ export function processGenuiSpec(value: unknown): GenuiProcessResult {
   // unknown type. The processing pipeline is renderer-aware by contract:
   // custom nodes stay opaque and must not fail native schema validation.
   const errors = validation.errors.filter(error => !error.includes(': unknown type '))
+  if (repaired !== null && errors.length === 0) {
+    errors.push(...analyzeSubmissionRegistry(repaired).diagnostics)
+  }
   if (declaredNativeCount > renderedNativeCount) {
     errors.push(`repair dropped ${declaredNativeCount - renderedNativeCount} declared native node(s): declared ${declaredNativeCount}, rendered ${renderedNativeCount}`)
   }
@@ -1597,7 +1503,7 @@ export function processGenuiSpec(value: unknown): GenuiProcessResult {
     normalized: normalized.value,
     repaired,
     spec: repaired,
-    errors,
+    errors: [...new Set(errors)],
     warnings: [...normalized.warnings, ...diagnoseUnknownGenuiFields(normalized.value)],
     // Compatibility fields retain their historical meanings: declaredCount
     // is native declarations, while renderedCount is the total rendered tree.
@@ -1916,6 +1822,20 @@ function validateNode(value: unknown, depth: number, at: string, errors: string[
       }
       if (v.details !== undefined && !Array.isArray(v.details)) {
         errors.push(`${at}.details must be an array aligned with rows`)
+      }
+      if (Array.isArray(v.details)) {
+        const table = { columns: v.columns, rows: v.rows, types: v.types }
+        const rowCount = tableRowsForDetails(table).length
+        if (v.details.length > rowCount) errors.push(`${at}.details must not contain more entries than rows`)
+        for (let i = 0; i < Math.min(v.details.length, rowCount); i++) {
+          const detail = v.details[i]
+          if (detail === null || !isTableDetailReachable(table, i)) continue
+          if (!Array.isArray(detail)) {
+            errors.push(`${at}.details[${i}] must be an array or null`)
+            continue
+          }
+          walk(detail, depth + 1, `${at}.details[${i}]`)
+        }
       }
       validateTableRows(v.rows, `${at}.rows`, errors)
       break

@@ -20,6 +20,7 @@ import { t as tr, useT } from '../i18n/index.ts'
 import css from '../GenuiBlock.module.css'
 import { GENUI_LIMITS } from '../genui-runtime/index.ts'
 import type { GenuiChart, GenuiTable } from '../spec.ts'
+import { isTableGroupHeaderRow, tableRowsForDetails } from '../table-details.ts'
 
 export const CHART_COLORS = [
   'var(--dsw-static-deepseek-400)',
@@ -233,9 +234,8 @@ export const TableNode = memo(function TableNode({ node, renderDetail, filterVal
 }) {
   useT()
   const columns = node.columns.slice(0, GENUI_LIMITS.maxTableCols)
-  const rows = node.rows.slice(0, GENUI_LIMITS.maxTableRows)
+  const rows = tableRowsForDetails<GenuiTable['rows'][number]>(node)
   const types = node.types ?? []
-  const groupMode = types[0] === 'group'
   const [sort, setSort] = useState<{ col: number; dir: 1 | -1 } | null>(null)
   const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(() => new Set())
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(() => new Set())
@@ -254,9 +254,7 @@ export const TableNode = memo(function TableNode({ node, renderDetail, filterVal
   // filled and every other cell empty opens a section. Data rows after it are
   // its CHILDREN — indented, counted, and collapsible — so the relationship is
   // unmistakable instead of "one more row at the same level".
-  const isGroupRow = (row: GenuiTable['rows'][number]): boolean =>
-    groupMode && String(row[0] ?? '').trim() !== ''
-    && row.slice(1).every(cell => String(cell ?? '').trim() === '')
+  const isGroupRow = (row: GenuiTable['rows'][number]): boolean => isTableGroupHeaderRow(row, types)
 
   // Local filtering (bound control): the model ships the full data set once and
   // the reader narrows it live — no round trip, no re-generation.

@@ -6,6 +6,7 @@ import { GenuiBlock } from '../src/client/GenuiBlock.tsx'
 import { repairGenuiSpec } from '../src/client/guard.ts'
 import type { BlockInteractionState } from '../src/client/interaction-store.ts'
 import type { GenuiSpec } from '../src/client/spec.ts'
+import { GENUI_LIMITS } from '../src/client/genui-runtime/index.ts'
 
 type Action = [string, Record<string, unknown>]
 
@@ -48,6 +49,48 @@ describe('submit submission members', () => {
     expect(submitUi(container).hint).toContain('已选 2/2')
     fireEvent.click(submitUi(container).button)
     expect(actions).toEqual([['grade_calc', { type: 'submit', answers: {}, fields: { e3_ll: '1.3000', e3_ur: '0.5000' }, total: 2, answered: 2 }]])
+  })
+
+  it('submits a field rendered from expanded table details', () => {
+    const actions: Action[] = []
+    const spec: GenuiSpec = { items: [
+      { type: 'table', columns: ['项目'], rows: [['A']], details: [[{ type: 'input', id: 'note', label: '备注' }]] },
+      { type: 'submit', label: '提交', action: 'send' },
+    ] }
+    const { container } = mount(spec, actions)
+    expect(submitUi(container).button.disabled).toBe(true)
+    fireEvent.click(container.querySelector('button[class*="detailToggle"]')!)
+    fireEvent.change(container.querySelector('input:not([type="radio"]):not([type="checkbox"])')!, { target: { value: 'checked' } })
+    expect(submitUi(container).button.disabled).toBe(false)
+    fireEvent.click(submitUi(container).button)
+    expect(actions).toEqual([['send', { type: 'submit', answers: {}, fields: { note: 'checked' }, total: 1, answered: 1 }]])
+  })
+
+  it('does not expose group-header details as submission members', () => {
+    const actions: Action[] = []
+    const { container } = mount({ items: [
+      { type: 'table', columns: ['区域', '数值'], types: ['group', 'num'], rows: [['华东', ''], ['上海', '120']], details: [[{ type: 'input', id: 'region_note' }], null] },
+      { type: 'submit', label: '提交', action: 'send', groups: ['region_note'] },
+    ] }, actions)
+    expect(container.querySelector('input')).toBeNull()
+    expect(container.querySelector('button[class*="detailToggle"]')).toBeNull()
+    expect(submitUi(container).button.disabled).toBe(true)
+    expect(submitUi(container).hint).toContain('已选 0/1')
+    expect(actions).toEqual([])
+  })
+
+  it('does not register table details beyond the renderer row limit', () => {
+    const actions: Action[] = []
+    const rows = Array.from({ length: GENUI_LIMITS.maxTableRows + 1 }, (_unused, index) => [`row ${index}`])
+    const details = Array.from({ length: rows.length }, (_unused, index) => index === rows.length - 1 ? [{ type: 'input' as const, id: 'last_row' }] : null)
+    const { container } = mount({ items: [
+      { type: 'table', columns: ['Row'], rows, details },
+      { type: 'submit', label: '提交', action: 'send', groups: ['last_row'] },
+    ] }, actions)
+    expect(container.querySelector('input')).toBeNull()
+    expect(submitUi(container).button.disabled).toBe(true)
+    expect(submitUi(container).hint).toContain('已选 0/1')
+    expect(actions).toEqual([])
   })
 
   it.each(['input', 'textarea'] as const)('%s requires a nonblank field value', type => {
@@ -202,6 +245,15 @@ describe('submit submission members', () => {
     expect(submitUi(container).button.disabled).toBe(true)
     expect(submitUi(container).hint).toContain('已选 0/1')
     expect(actions).toEqual([])
+  })
+
+  it('renders a direct block with a native tree deeper than the renderer limit', () => {
+    const actions: Action[] = []
+    let items: GenuiSpec['items'] = [{ type: 'text', content: 'deep' }]
+    for (let depth = 0; depth < GENUI_LIMITS.maxDepth + 4; depth++) {
+      items = [{ type: 'row', items }]
+    }
+    expect(() => mount({ items }, actions)).not.toThrow()
   })
 
   it.each([
