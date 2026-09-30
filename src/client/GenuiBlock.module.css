@@ -628,6 +628,38 @@ img.mediaPlayer { aspect-ratio: 16 / 9; object-fit: cover; background: var(--dsl
 .tdDelta { font-weight: 600; }
 .tdDeltaUp { color: var(--dsw-alias-state-success-secondary, #1f9d63); }
 .tdDeltaDown { color: var(--dsw-alias-state-error-primary, #d94848); }
+/* A cell carrying real line breaks opts out of the `nowrap` data voice.
+   Prose keeps `pre-line` (newlines paint, spaces collapse as everywhere else);
+   a code-shaped cell uses `pre-wrap` so leading indentation survives too.
+   Either way the newline characters stay in the DOM, which is what makes the
+   cell selectable and copyable as the multi-line snippet the model wrote. */
+.table th.tdMultiline,
+.table td.tdMultiline {
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  vertical-align: top;
+}
+.table th.tdCode,
+.table td.tdCode {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  vertical-align: top;
+}
+/* An inline code span keeps its own spacing too (a pasted snippet often lives
+   inside backticks), matching the block-level code surface. */
+.inlineCode { white-space: pre-wrap; }
+/* Prose surfaces that may receive a real newline from the model. A `<br>` used
+   to force these breaks; a real newline needs `pre-line` to paint, and that is
+   the same declaration that makes the text copy back as multiple lines. */
+.calloutBody,
+.liTitle,
+.liDesc,
+.kvValue,
+.tlDesc,
+.detailBody,
+.accBody { white-space: pre-line; }
 
 /* sortable header button (v2.9) */
 .thSort {
