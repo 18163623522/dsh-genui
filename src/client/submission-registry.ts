@@ -129,20 +129,20 @@ export function resolveSubmitState({ registry, groups, state }: {
   groups?: string[]
   state: SubmitInteractionState
 }): ResolvedSubmitState {
+  const hasUnknownMember = groups?.some(key => !registry.members.has(key)) ?? false
   const scope = groups === undefined
     ? [...registry.members.values()].filter(member => isSubmissionMemberAnswered(member, state))
-    : groups.map(key => {
+    : groups.flatMap(key => {
       const member = registry.members.get(key)
-      if (member === undefined) throw new Error(`submit.groups references unknown submission member '${key}'`)
-      return member
+      return member === undefined ? [] : [member]
     })
   const answered = scope.filter(member => isSubmissionMemberAnswered(member, state)).length
-  const total = scope.length
+  const total = groups?.length ?? scope.length
   const scopeKeys = new Set(scope.map(member => member.key))
   const hasOutOfScopePayload = Object.keys(state.answers).some(key => !scopeKeys.has(key))
     || Object.keys(state.multiAnswers).length > 0
     || Object.entries(state.fields).some(([key, value]) => value.trim() !== '' && !state.secretFields.has(key))
-  const canGradeLocally = groups !== undefined && scope.length > 0
+  const canGradeLocally = !hasUnknownMember && scope.length > 0
     && scope.every(member => member.kind === 'radio')
     && scope.some(member => member.kind === 'radio' && member.answer !== undefined)
     && !hasOutOfScopePayload

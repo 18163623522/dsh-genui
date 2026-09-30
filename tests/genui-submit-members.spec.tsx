@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GenuiActionContext } from '../src/client/action-context.ts'
 import { GenuiBlock } from '../src/client/GenuiBlock.tsx'
+import { repairGenuiSpec } from '../src/client/guard.ts'
 import type { BlockInteractionState } from '../src/client/interaction-store.ts'
 import type { GenuiSpec } from '../src/client/spec.ts'
 
@@ -158,6 +159,32 @@ describe('submit submission members', () => {
     fireEvent.click(container.querySelectorAll('[type="radio"]')[1]!)
     fireEvent.click(submitUi(container).button)
     expect(container.querySelector('[data-genui-grade]')?.textContent).toContain('1 / 1')
+    expect(actions).toEqual([])
+  })
+
+  it('grades a radio answer locally when submit has no groups or action', () => {
+    const actions: Action[] = []
+    const { container } = mount({ items: [
+      { type: 'radio', group: 'q1', label: 'Question', options: ['A', 'B'], answer: 1 },
+      { type: 'submit', label: 'Grade' },
+    ] }, actions)
+    fireEvent.click(container.querySelectorAll('[type="radio"]')[1]!)
+    expect(submitUi(container).button.disabled).toBe(false)
+    fireEvent.click(submitUi(container).button)
+    expect(container.querySelector('[data-genui-grade]')?.textContent).toContain('1 / 1')
+    expect(actions).toEqual([])
+  })
+
+  it('keeps a repaired submit with an unknown group mounted and disabled', () => {
+    const actions: Action[] = []
+    const spec = repairGenuiSpec({ items: [
+      { type: 'radio', group: 'q1', options: ['A', 'B'], answer: 1 },
+      { type: 'submit', label: 'Send', action: 'send', groups: ['missing'] },
+    ] })!
+    const { container } = mount(spec, actions)
+    fireEvent.click(container.querySelectorAll('[type="radio"]')[1]!)
+    expect(submitUi(container).button.disabled).toBe(true)
+    expect(submitUi(container).hint).toContain('已选 0/1')
     expect(actions).toEqual([])
   })
 

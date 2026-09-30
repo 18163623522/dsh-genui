@@ -105,6 +105,8 @@ describe('submission registry', () => {
     expect(resolveSubmitState({ registry, state })).toMatchObject({ answered: 3, total: 3, canGradeLocally: false })
     expect(resolveSubmitState({ registry, groups: ['q1'], state })).toMatchObject({ answered: 1, total: 1, canGradeLocally: false })
     expect(resolveSubmitState({ registry, groups: ['q1'], state: { ...emptyState, answers: { q1: 'B' } } })).toMatchObject({ answered: 1, total: 1, canGradeLocally: true })
+    expect(resolveSubmitState({ registry, state: { ...emptyState, answers: { q1: 'B' } } })).toMatchObject({ answered: 1, total: 1, canGradeLocally: true })
+    expect(resolveSubmitState({ registry, groups: ['q1', 'missing'], state: { ...emptyState, answers: { q1: 'B' } } })).toMatchObject({ answered: 1, total: 2, canGradeLocally: false })
     expect(resolveSubmitState({ registry, groups: ['q1'], state: { ...emptyState, answers: { q1: 'B' }, multiAnswers: { extras: [] } } }).canGradeLocally).toBe(false)
   })
 })
