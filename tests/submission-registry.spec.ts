@@ -4,6 +4,7 @@ import type { GenuiSpec } from '../src/client/spec.ts'
 import { analyzeSubmissionRegistry, compileSubmissionRegistry, isSubmissionMemberAnswered, resolveSubmitState } from '../src/client/submission-registry.ts'
 import type { SubmitInteractionState } from '../src/client/submission-registry.ts'
 import { walkGenuiNodes } from '../src/client/walk-spec.ts'
+import { GENUI_LIMITS } from '../src/client/genui-runtime/index.ts'
 
 const emptyState: SubmitInteractionState = { answers: {}, multiAnswers: {}, fields: {}, secretFields: new Set() }
 
@@ -17,14 +18,25 @@ describe('submission registry', () => {
       { type: 'tabs', tabs: [{ label: 'T', items: [{ type: 'radio', group: 'tab', options: ['A'] }] }] },
       { type: 'accordion', items: [{ title: 'A', items: [{ type: 'checkbox', group: 'fold', label: 'A' }] }] },
       { type: 'list', items: [{ type: 'input', id: 'list' }] },
+      { type: 'table', columns: ['Item'], rows: [['A']], details: [[{ type: 'input', id: 'detail' }], null] },
     ] } as GenuiSpec
     const paths: string[] = []
     walkGenuiNodes(spec, (node, path) => { if ('id' in node || 'group' in node) paths.push(path) })
     expect(paths).toEqual([
       'items[0].items[0]', 'items[1].items[0]', 'items[2].items[0]', 'items[3].items[0]',
-      'items[4].tabs[0].items[0]', 'items[5].items[0].items[0]', 'items[6].items[0]',
+      'items[4].tabs[0].items[0]', 'items[5].items[0].items[0]', 'items[6].items[0]', 'items[7].details[0][0]',
     ])
-    expect([...compileSubmissionRegistry(spec).members.keys()]).toEqual(['row', 'col', 'grid', 'card', 'tab', 'fold', 'list'])
+    expect([...compileSubmissionRegistry(spec).members.keys()]).toEqual(['row', 'col', 'grid', 'card', 'tab', 'fold', 'list', 'detail'])
+  })
+
+  it('bounds direct traversal of cyclic component trees at the renderer depth limit', () => {
+    const items: GenuiSpec['items'] = []
+    const row = { type: 'row' as const, items }
+    items.push(row)
+    const paths: string[] = []
+    walkGenuiNodes({ items }, (_node, path) => paths.push(path))
+    expect(paths).toHaveLength(GENUI_LIMITS.maxDepth + 1)
+    expect(paths.at(-1)).toBe(`items[0]${'.items[0]'.repeat(GENUI_LIMITS.maxDepth)}`)
   })
 
   it('compiles static radio, checkbox, and field members', () => {
@@ -71,6 +83,10 @@ describe('submission registry', () => {
     ] }).ok).toBe(true)
     expect(processGenuiSpec({ items: [{ type: 'submit', label: 'Send', groups: ['missing'] }] }).errors)
       .toContain("items[0].groups[0]: submit.groups references unknown submission member 'missing'")
+    expect(processGenuiSpec({ items: [
+      { type: 'custom-renderer', payload: 'opaque' },
+      { type: 'submit', label: 'Send', action: 'send', groups: ['missing'] },
+    ] }).errors).toContain("items[1].groups[0]: submit.groups references unknown submission member 'missing'")
     expect(validateGenuiSpec({ items: [
       { type: 'tabs', tabs: [{ label: 'T', items: [{ type: 'input', id: 'key' }] }] },
       { type: 'accordion', items: [{ title: 'A', items: [{ type: 'radio', group: 'key', options: ['A'] }] }] },

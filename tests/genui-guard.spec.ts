@@ -301,6 +301,16 @@ describe('node counting: container descent + declared nodes (issue #42)', () => 
   it('countDeclaredGenuiNodes counts a single-component root', () => {
     expect(countDeclaredGenuiNodes({ type: 'callout', content: 'x' })).toBe(1)
   })
+
+  it('counts and validates nodes nested in table details', () => {
+    const tree = { items: [
+      { type: 'table', columns: ['Item'], rows: [['A']], details: [[{ type: 'input', id: 'note' }]] },
+      { type: 'submit', label: 'Send', action: 'send', groups: ['note'] },
+    ] }
+    expect(countGenuiNodes(tree)).toBe(3)
+    expect(countDeclaredGenuiNodes(tree)).toBe(3)
+    expect(validateGenuiSpec(tree).ok).toBe(true)
+  })
 })
 
 describe('repairGenuiSpec: list nodes', () => {

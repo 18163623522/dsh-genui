@@ -1374,6 +1374,11 @@ export function countGenuiNodes(value: unknown, cap = Number.POSITIVE_INFINITY):
           const lo = obj(li)
           if (lo !== undefined && typeof lo.type === 'string') walk([lo])
         }
+      } else if (v.type === 'table' && Array.isArray(v.details)) {
+        for (const detail of v.details) {
+          if (count >= cap) return
+          if (Array.isArray(detail)) walk(detail)
+        }
       }
     }
   }
@@ -1429,6 +1434,10 @@ function visitDeclaredGenuiNodes(
     } else if (v.type === 'list' && Array.isArray(v.items)) {
       for (let row = 0; row < v.items.length; row++) {
         walkNode(v.items[row], `${at}.items[${row}]`)
+      }
+    } else if (v.type === 'table' && Array.isArray(v.details)) {
+      for (let row = 0; row < v.details.length; row++) {
+        if (Array.isArray(v.details[row])) walk(v.details[row], `${at}.details[${row}]`)
       }
     }
   }
@@ -1589,6 +1598,9 @@ export function processGenuiSpec(value: unknown): GenuiProcessResult {
   // unknown type. The processing pipeline is renderer-aware by contract:
   // custom nodes stay opaque and must not fail native schema validation.
   const errors = validation.errors.filter(error => !error.includes(': unknown type '))
+  if (repaired !== null && errors.length === 0) {
+    errors.push(...analyzeSubmissionRegistry(repaired).diagnostics)
+  }
   if (declaredNativeCount > renderedNativeCount) {
     errors.push(`repair dropped ${declaredNativeCount - renderedNativeCount} declared native node(s): declared ${declaredNativeCount}, rendered ${renderedNativeCount}`)
   }
@@ -1597,7 +1609,7 @@ export function processGenuiSpec(value: unknown): GenuiProcessResult {
     normalized: normalized.value,
     repaired,
     spec: repaired,
-    errors,
+    errors: [...new Set(errors)],
     warnings: [...normalized.warnings, ...diagnoseUnknownGenuiFields(normalized.value)],
     // Compatibility fields retain their historical meanings: declaredCount
     // is native declarations, while renderedCount is the total rendered tree.
@@ -1916,6 +1928,17 @@ function validateNode(value: unknown, depth: number, at: string, errors: string[
       }
       if (v.details !== undefined && !Array.isArray(v.details)) {
         errors.push(`${at}.details must be an array aligned with rows`)
+      }
+      if (Array.isArray(v.details)) {
+        for (let i = 0; i < v.details.length; i++) {
+          const detail = v.details[i]
+          if (detail === null) continue
+          if (!Array.isArray(detail)) {
+            errors.push(`${at}.details[${i}] must be an array or null`)
+            continue
+          }
+          walk(detail, depth + 1, `${at}.details[${i}]`)
+        }
       }
       validateTableRows(v.rows, `${at}.rows`, errors)
       break
