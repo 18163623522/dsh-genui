@@ -96,7 +96,7 @@ CI 的 packed host smoke 会把实际生成的 npm tarball 安装到真实 DSH �
 
 前置条件，缺一不可：
 
-1. **dsh `^0.1.2-rc.1 || ^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || >=0.2.0-rc.1 <0.3.0-0`**（DSH `0.2.0-rc.1` 当前属于预发布版本；已验证宿主角色：minimum `dsh-v0.1.2-rc.1`、current `dsh-v0.1.7-rc.2`、next `dsh-v0.2.0-rc.1`；使用 DSH `<=0.1.1-rc.x` 的用户请使用 dsh-genui `0.9.8`）
+1. **dsh `^0.1.2-rc.1 || ^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || >=0.2.0-rc.1 <0.3.0-0`**（DSH `0.2.0-rc.1` 当前属于预发布版本；已验证宿主角色：minimum `dsh-v0.1.2-rc.1`、current `dsh-v0.1.7-rc.2`、next `dsh-v0.2.0-rc.2`；使用 DSH `<=0.1.1-rc.x` 的用户请使用 dsh-genui `0.9.8`）
 2. **`pnpm` 在 PATH 上**：`dsh plugin` 命令依赖它。没有就 `corepack enable`（或 `npm i -g pnpm`），然后**新开一个终端**，确认 `pnpm -v` 有输出
 
 安装并在 DSH 中激活（一行命令，自动带上全部依赖）：
@@ -115,6 +115,12 @@ npm install @changfenhuang/dsh-genui
 > `npm install` 只添加依赖，不会把插件注册到 DSH；在 DSH 中使用时仍应执行上面的 `dsh plugin add`。
 
 > ⚠️ **别用 `link:` 装一个刚 clone 的目录**——`link:` 不会安装插件的依赖（mermaid / three / react），装完渲染器会挂。正常安装请使用上面的 npm 命令；只有本地开发迭代才用 `link:`（见下文）。
+
+### 认准包名与版本
+
+- **包名必须带 scope**：npm 上另有一个同名但不带 scope 的 [`dsh-genui`](https://www.npmjs.com/package/dsh-genui)（Vue/OpenTiny 实现，与本仓库无关，维护者不同）。如果安装列表里描述是 "interactive charts, forms, calculators, dashboards, and mini apps"，那是那个项目——装上会因 peer 不兼容被宿主拒绝。本插件始终是 **`@changfenhuang/dsh-genui`**。
+- **宿主拒绝安装时**：支持的宿主范围由 peerDependencies 声明、宿主据此检查，升级到 npm 上 `latest` 的插件版本重装即可，无需改其他配置。
+- **解析到的版本低于 `latest`**：多半是 pnpm 的发布冷静期在起作用（默认跳过发布不满 24 小时的版本，且不提示）。等一天重试，或在 profile 的 `pnpm-workspace.yaml` 的 `minimumReleaseAgeExclude` 里加入目标版本；profile 里精确 pin 过旧版本的，先改依赖声明再重装。
 
 ### 从旧 `@omdsh-dev` 包名迁移
 

@@ -96,7 +96,7 @@ The repository ships both renderer channels, the host plugin, and the built brow
 
 Prerequisites — all required:
 
-1. **dsh `^0.1.2-rc.1 || ^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || >=0.2.0-rc.1 <0.3.0-0`** (DSH `0.2.0-rc.1` is currently a prerelease; verified host roles: minimum `dsh-v0.1.2-rc.1`, current `dsh-v0.1.7-rc.2`, next `dsh-v0.2.0-rc.1`; users on DSH `<=0.1.1-rc.x` should use dsh-genui `0.9.8`)
+1. **dsh `^0.1.2-rc.1 || ^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || >=0.2.0-rc.1 <0.3.0-0`** (DSH `0.2.0-rc.1` is currently a prerelease; verified host roles: minimum `dsh-v0.1.2-rc.1`, current `dsh-v0.1.7-rc.2`, next `dsh-v0.2.0-rc.2`; users on DSH `<=0.1.1-rc.x` should use dsh-genui `0.9.8`)
 2. **`pnpm` on your PATH**: the `dsh plugin` command depends on it. If missing: `corepack enable` (or `npm i -g pnpm`), then **open a new terminal** and confirm `pnpm -v` prints a version
 
 Install and activate in DSH (one command, all dependencies included):
@@ -115,6 +115,12 @@ npm install @changfenhuang/dsh-genui
 > `npm install` only adds the dependency; it does not register the plugin with DSH. Use `dsh plugin add` above when installing it into DSH.
 
 > ⚠️ **Don't use `link:` on a freshly cloned directory** — `link:` does not install the plugin's dependencies (mermaid / three / react), so the renderer will break. Use the npm command above for normal installation; reserve `link:` for local development iteration (see below).
+
+### Package name and version matter
+
+- **The scope matters**: npm also hosts a same-named, unscoped [`dsh-genui`](https://www.npmjs.com/package/dsh-genui) (a Vue/OpenTiny implementation by a different maintainer, unrelated to this repo). If an install listing describes "interactive charts, forms, calculators, dashboards, and mini apps", that is the other project — the host will reject it over incompatible peers. This plugin is always **`@changfenhuang/dsh-genui`**.
+- **When the host rejects the install**: the supported host range is declared in peerDependencies and enforced by the host — upgrade to the `latest` plugin version on npm and reinstall; no other config changes are needed.
+- **When the resolved version is older than `latest`**: this is usually pnpm's release-age policy (versions published within the last 24 hours are silently skipped). Wait a day and retry, or add the target version to `minimumReleaseAgeExclude` in the profile's `pnpm-workspace.yaml`; if the profile exact-pins an old version, update the declaration first, then reinstall.
 
 ### Migrating from the old `@omdsh-dev` package name
 
