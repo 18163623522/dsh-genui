@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **多行文本/代码的复制不再丢换行**：行内渲染曾把每个 `\n` 变成 `<br>`，而 `<br>` 对 `textContent` 与 `Selection.toString()` **零贡献**——用户选中表格单元格复制出来的是一整行，`python - <<'PY' … PY` 这类 heredoc 结构被毁、必须手工拼回。现在换行在 DOM 里保持为**真实换行符**（选中/复制原样），由容器的 `white-space` 负责呈现：代码形单元格 `.tdCode` 用 `pre-wrap`（换行 + 行首缩进都保留），散文单元格 `.tdMultiline` 用 `pre-line`（换行呈现、空格照常折叠），单行单元格仍是 `nowrap`；`calloutBody`/`liTitle`/`liDesc`/`kvValue`/`tlDesc`/`detailBody`/`accBody` 同步声明 `pre-line`，因为它们此前正是靠 `<br>` 硬断行（#233）。
+- **多行表格单元格的缩进**：`.table td` 的 `nowrap`（表格的数据语气）会折叠单元格里的空白，模型写进单元格的代码缩进会消失；行内 `` `code` `` 同步改为 `pre-wrap`，不再吞掉自身空格（#233）。
+
 ## [0.11.3] - 2026-09-29
 
 ### 兼容性
