@@ -31,6 +31,7 @@ import { normalizeGenuiSpec } from './genui-runtime/normalize.ts'
 import { diagnoseUnknownGenuiFields } from './genui-runtime/diagnostics.ts'
 import type { GenuiDiagnostic } from './genui-runtime/diagnostics.ts'
 import { GENUI_LIMITS } from './genui-runtime/limits.ts'
+import { analyzeSubmissionRegistry } from './submission-registry.ts'
 import { color, enu, int, num, obj, opt, safeHref, safeMediaSrc, str } from './genui-runtime/value-utils.ts'
 
 /** Result of `validateGenuiSpec`. */
@@ -569,10 +570,7 @@ function repairNodeFields(value: unknown, ctx: RepairCtx, depth: number): GenuiN
     }
     case 'submit': {
       const label = str(v.label, GENUI_LIMITS.maxString)
-      // action is OPTIONAL: local grading (any question carries `answer`)
-      // needs no round trip, so a submit without an action is valid. It only
-      // becomes semantically required when no local answers exist — the
-      // renderer disables the button then (honest affordance).
+      // 本地判卷可以不设置 action；不满足判卷条件时，渲染器会禁用无 action 的按钮。
       const action = str(v.action, 200)
       if (label === undefined) return null
       return {
@@ -1524,6 +1522,7 @@ export function validateCanonicalGenuiSpec(value: unknown): GenuiValidation {
     }
   }
   walk(v.items, 0, 'items')
+  if (errors.length === 0) errors.push(...analyzeSubmissionRegistry(v as unknown as GenuiSpec).diagnostics)
   const uniqueErrors = [...new Set(errors)]
   return { ok: uniqueErrors.length === 0, errors: uniqueErrors }
 }
@@ -1864,9 +1863,7 @@ function validateNode(value: unknown, depth: number, at: string, errors: string[
       break
     case 'submit':
       if (typeof v.label !== 'string') errors.push(`${at}: type 'submit' requires label (string)`)
-      // action is optional (local grading needs no round trip); the
-      // renderer disables the button when it is absent AND no question
-      // carries local `answer` data.
+      // 本地判卷可以不设置 action；不满足判卷条件时，渲染器会禁用无 action 的按钮。
       break
     case 'badge':
       if (typeof v.label !== 'string' && typeof v.text !== 'string' && typeof v.value !== 'string') {
