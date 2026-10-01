@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { processGenuiSpec, repairGenuiSpec, validateGenuiSpec } from '../src/client/guard.ts'
+import { partialRepairGenuiSpec, processGenuiSpec, repairGenuiSpec, validateGenuiSpec } from '../src/client/guard.ts'
 import { COMPONENT_SCHEMAS } from '../src/client/genui-runtime/schema.ts'
 import { normalizeGenuiSpec } from '../src/client/genui-runtime/normalize.ts'
 import { diagnoseUnknownGenuiFields } from '../src/client/genui-runtime/diagnostics.ts'
@@ -135,6 +135,22 @@ describe('GenUI runtime schema normalization', () => {
     const processed = processGenuiSpec(raw)
     expect(processed.errors).toEqual([])
     expect((processed.repaired?.items[0] as { details: unknown[][] }).details[0]).toEqual([{ type: 'select', id: 'choice', options: ['A', 'B'] }])
+  })
+
+  it('preserves detail alias normalization and row alignment after pruning a bad entry', () => {
+    const raw = { items: [
+      { type: 'table', columns: ['Item'], rows: [['A'], ['B']], details: [{ type: 'text', content: 'bad entry' }, [{ type: 'select', id: 'choice', items: ['A', 'B'] }]] },
+      { type: 'submit', label: 'Send', action: 'send', groups: ['choice'] },
+    ] }
+    const processed = processGenuiSpec(raw)
+    expect(processed.errors).toEqual(['items[0].details[0] must be an array or null'])
+    expect(processed.warnings).toContainEqual(expect.objectContaining({ path: 'items[0].details[1][0].items', canonical: 'options' }))
+    const candidate = partialRepairGenuiSpec(processed)
+    expect(candidate?.items).toEqual([
+      { type: 'table', columns: ['Item'], rows: [['A'], ['B']], details: [null, [{ type: 'select', id: 'choice', options: ['A', 'B'] }]] },
+      raw.items[1],
+    ])
+    expect(validateGenuiSpec(candidate).ok).toBe(true)
   })
 
   it('leaves group-header details outside normalization and diagnostics', () => {

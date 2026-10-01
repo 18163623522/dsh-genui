@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { GenuiActionContext } from '../src/client/action-context.ts'
 import { GenuiBlock } from '../src/client/GenuiBlock.tsx'
+import { resolveGenuiSpec } from '../src/client/fence-render.tsx'
 import { repairGenuiSpec } from '../src/client/guard.ts'
 import type { BlockInteractionState } from '../src/client/interaction-store.ts'
 import type { GenuiSpec } from '../src/client/spec.ts'
@@ -62,6 +63,24 @@ describe('submit submission members', () => {
     fireEvent.click(container.querySelector('button[class*="detailToggle"]')!)
     fireEvent.change(container.querySelector('input:not([type="radio"]):not([type="checkbox"])')!, { target: { value: 'checked' } })
     expect(submitUi(container).button.disabled).toBe(false)
+    fireEvent.click(submitUi(container).button)
+    expect(actions).toEqual([['send', { type: 'submit', answers: {}, fields: { note: 'checked' }, total: 1, answered: 1 }]])
+  })
+
+  it('submits the surviving detail field on its original row after partial fence repair', () => {
+    const actions: Action[] = []
+    const spec = resolveGenuiSpec(JSON.stringify({ items: [
+      { type: 'table', columns: ['Item'], rows: [['A'], ['B']], details: [{ type: 'text', content: 'bad entry' }, [{ type: 'text' }, { type: 'input', id: 'note', label: 'Note' }]] },
+      { type: 'submit', label: 'Send', action: 'send', groups: ['note'] },
+    ] }))
+    expect(spec).not.toBeNull()
+    const { container } = mount(spec!, actions)
+    const rows = container.querySelectorAll('tbody tr')
+    expect(rows[0]!.querySelector('button[class*="detailToggle"]')).toBeNull()
+    fireEvent.click(rows[1]!.querySelector('button[class*="detailToggle"]')!)
+    expect(submitUi(container).hint).toContain('已选 0/1')
+    fireEvent.change(container.querySelector('input')!, { target: { value: 'checked' } })
+    expect(submitUi(container).hint).toContain('已选 1/1')
     fireEvent.click(submitUi(container).button)
     expect(actions).toEqual([['send', { type: 'submit', answers: {}, fields: { note: 'checked' }, total: 1, answered: 1 }]])
   })
