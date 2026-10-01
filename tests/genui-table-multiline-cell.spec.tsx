@@ -68,6 +68,16 @@ describe('multi-line table cells keep their line structure and indentation', () 
     expect(selectionTextOf(prose)).toBe(PROSE_CELL)
   })
 
+  it('normalizes CRLF in prose and indented code without losing copy structure', () => {
+    for (const cell of [PROSE_CELL, CODE_CELL]) {
+      const td = renderCell(cell.replaceAll('\n', '\r\n')).querySelector('td:nth-child(2)')!
+      expect(td.textContent).toBe(cell)
+      expect(selectionTextOf(td)).toBe(cell)
+      expect(td.querySelector('br')).toBeNull()
+      expect(td.className).toContain(cell === CODE_CELL ? 'tdCode' : 'tdMultiline')
+    }
+  })
+
   it('leaves a single-line cell on the nowrap data voice', () => {
     const td = renderCell('ls -la').querySelector('td:nth-child(2)')!
     expect(td.className).not.toContain('tdCode')

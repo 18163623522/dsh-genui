@@ -7,6 +7,8 @@ import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import { renderInline } from '../src/client/inline.ts'
 import { GenuiBlock } from '../src/client/GenuiBlock.tsx'
+import styles from '../src/client/GenuiBlock.module.css'
+import type { GenuiNode } from '../src/client/spec.ts'
 
 afterEach(cleanup)
 
@@ -15,7 +17,65 @@ const html = (text: string): string => {
   return container.innerHTML
 }
 
+function selectionTextOf(node: Element): string {
+  const range = document.createRange()
+  range.selectNodeContents(node)
+  const selection = window.getSelection()!
+  selection.removeAllRanges()
+  selection.addRange(range)
+  return selection.toString()
+}
+
+/** Match the exact owning selector, rather than a later unrelated CSS rule. */
+function whiteSpaceFor(selector: string): string | undefined {
+  const css = readFileSync(join(process.cwd(), 'src/client/GenuiBlock.module.css'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+  let value: string | undefined
+  for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!rule[1]!.split(',').some(part => part.trim() === selector)) continue
+    const declaration = /white-space:\s*([^;]+)/.exec(rule[2]!)
+    if (declaration !== null) value = declaration[1]!.trim()
+  }
+  return value
+}
+
 describe('inline markup', () => {
+  it.each(['body', 'muted', 'caption', 'h1', 'h2', 'h3'] as const)(
+    'preserves LF and CRLF in the %s text surface, including emphasis and copy', size => {
+      for (const newline of ['\n', '\r\n']) {
+        const { container } = render(<GenuiBlock spec={{ items: [
+          { type: 'text', size, content: `**第一行**${newline}第二行` },
+        ] }} />)
+        const text = container.querySelector(`.${styles.text}`)!
+        expect(text.querySelector('strong')?.textContent).toBe('第一行')
+        expect(text.querySelector('br')).toBeNull()
+        expect(text.textContent).toBe('第一行\n第二行')
+        expect(selectionTextOf(text)).toBe('第一行\n第二行')
+      }
+      // jsdom has no line boxes; actual browser layout is verified separately.
+      expect(whiteSpaceFor('.text')).toBe('pre-line')
+    },
+  )
+
+  it.each([
+    ['radio', '.radio > span', styles.radio, (label: string): GenuiNode => ({ type: 'radio', options: [label] })],
+    ['checkbox', '.checkbox > span', styles.checkbox, (label: string): GenuiNode => ({ type: 'checkbox', label })],
+    ['tab', '.tab', styles.tab, (label: string): GenuiNode => ({ type: 'tabs', tabs: [{ label, items: [] }] })],
+    ['badge', '.badgeLabel', styles.badgeLabel, (label: string): GenuiNode => ({ type: 'badge', label, icon: '★' })],
+    ['submit', '.button', styles.submit, (label: string): GenuiNode => ({ type: 'submit', label })],
+  ] as const)('keeps multiline %s labels visible and copyable', (_name, selector, className, node) => {
+    for (const newline of ['\n', '\r\n']) {
+      const { container } = render(<GenuiBlock spec={{ items: [node(`**第一行**${newline}第二行`)] }} />)
+      const owner = container.querySelector(`.${className}`)!
+      const label = selector.endsWith(' > span') ? owner.querySelector('span')! : owner
+      expect(label).not.toBeNull()
+      expect(label.querySelector('br')).toBeNull()
+      expect(label.textContent).toBe('第一行\n第二行')
+      expect(selectionTextOf(label)).toBe('第一行\n第二行')
+    }
+    expect(whiteSpaceFor(selector)).toBe('pre-line')
+  })
+
   it.each([
     String.raw`\(\frac{a}{b}\)`,
     String.raw`\[\begin{pmatrix}a & b \\ c & d\end{pmatrix}\]`,

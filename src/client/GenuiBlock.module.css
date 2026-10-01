@@ -191,7 +191,7 @@ body[data-ds-dark-theme] .panel {
 
 /* ---------- text ---------- */
 
-.text { color: var(--dsw-alias-label-primary); }
+.text { color: var(--dsw-alias-label-primary); white-space: pre-line; }
 .text.h1 {
   font-size: var(--dsl-g-font-h1);
   font-weight: 800;
@@ -229,6 +229,7 @@ body[data-ds-dark-theme] .panel {
   cursor: pointer;
   transition: border-color 0.15s, filter 0.15s, background 0.15s, transform 0.1s;
   text-align: center;
+  white-space: pre-line;
   /* A button in a `col` must hug its label; only `full: true` stretches.
      (Default flex `align-items: stretch` used to make every stacked button a
      full-width slab.) */
@@ -650,16 +651,47 @@ img.mediaPlayer { aspect-ratio: 16 / 9; object-fit: cover; background: var(--dsl
 /* An inline code span keeps its own spacing too (a pasted snippet often lives
    inside backticks), matching the block-level code surface. */
 .inlineCode { white-space: pre-wrap; }
-/* Prose surfaces that may receive a real newline from the model. A `<br>` used
-   to force these breaks; a real newline needs `pre-line` to paint, and that is
-   the same declaration that makes the text copy back as multiple lines. */
+/* Rich-text owners must paint the real newlines kept by renderInline. Scope
+   this to prose/labels: table data keeps nowrap and code keeps pre-wrap. For
+   flex controls, target the label span so emphasis and plain text share one
+   line-formatting context (rather than becoming separate flex items). */
 .calloutBody,
 .liTitle,
 .liDesc,
 .kvValue,
 .tlDesc,
 .detailBody,
-.accBody { white-space: pre-line; }
+.accBody,
+.banner,
+.cardTitle,
+.mediaLabel,
+.heroLabel,
+.heroTitle,
+.heroSubtitle,
+.statLabel,
+.ringLabel,
+.ringSub,
+.calloutTitle,
+.stepTitle,
+.stepDesc,
+.kvKey,
+.tlTitle,
+.tlTime,
+.accTitle,
+.field > span,
+.fieldLabel,
+.switchLabel,
+.radio > span,
+.checkbox > span,
+.tab,
+.badgeLabel,
+.gradeQ,
+.gradeAns,
+.gradeRight,
+.gradeExp,
+.quizQuestion,
+.quizFeedback,
+.quizExplanation { white-space: pre-line; }
 
 /* sortable header button (v2.9) */
 .thSort {
