@@ -1530,30 +1530,37 @@ export function isRenderableProcess(processed: GenuiProcessResult): boolean {
 
 /* ---------------- partial fence rendering (issue #186) ---------------- */
 
-/** Longest declared-node path prefix a validation error points at. */
-const DECLARED_NODE_PATH_RE = /^(items\[\d+\](?:\.(?:items\[\d+\]|tabs\[\d+\]\.items\[\d+\]))*)/
+/** Longest node or aligned table-detail slot path a validation error points at. */
+const DECLARED_NODE_PATH_RE = /^(items\[\d+\](?:\.(?:items\[\d+\]|tabs\[\d+\]\.items\[\d+\]|details\[\d+\](?:\[\d+\])?))*)/
 
 function errorNodePath(error: string): string | null {
   const match = DECLARED_NODE_PATH_RE.exec(error)
   return match === null ? null : match[1] ?? null
 }
 
-/** Where the node at a declared path lives: its parent array and index. */
-function nodeSlotAt(root: Record<string, unknown>, path: string): { array: unknown[]; index: number } | undefined {
-  const steps = [...path.matchAll(/(?:^|\.)(items|tabs)\[(\d+)\]/g)]
-  if (steps.length === 0 || steps[steps.length - 1]![1] !== 'items') return undefined
+interface NodeSlot {
+  array: unknown[]
+  index: number
+  /** Detail row slots align with table rows; pruning must not shift them. */
+  preserveIndex: boolean
+}
+
+/** Where the node or table-detail slot at a validation path lives. */
+function nodeSlotAt(root: Record<string, unknown>, path: string): NodeSlot | undefined {
+  const steps = [...path.matchAll(/(?:^|\.)(items|tabs|details)\[(\d+)\]|\[(\d+)\]/g)]
+  if (steps.length === 0 || steps[steps.length - 1]![1] === 'tabs') return undefined
   let current: unknown = root
-  for (let i = 0; i < steps.length - 1; i++) {
+  for (let i = 0; i < steps.length; i++) {
     const step = steps[i]!
-    const holder = obj(current)
-    const list = holder === undefined ? undefined : holder[step[1]!]
-    current = Array.isArray(list) ? list[Number(step[2])] : undefined
+    // A detail child has a second index without a property: details[row][node].
+    const list = step[1] === undefined ? current : obj(current)?.[step[1]]
+    const index = Number(step[2] ?? step[3])
+    if (!Array.isArray(list) || index >= list.length) return undefined
+    if (i === steps.length - 1) return { array: list, index, preserveIndex: step[1] === 'details' }
+    current = list[index]
     if (current === undefined) return undefined
   }
-  const holder = obj(current)
-  const list = holder === undefined ? undefined : holder.items
-  if (!Array.isArray(list)) return undefined
-  return { array: list, index: Number(steps[steps.length - 1]![2]) }
+  return undefined
 }
 
 /** Deep-clone a JSON value for pruning; null when it cannot round-trip. */
@@ -1581,18 +1588,21 @@ export function partialRepairGenuiSpec(processed: GenuiProcessResult): GenuiSpec
   if (isRenderableProcess(processed)) return processed.spec
   if (processed.spec === null) return null
   const root = obj(processed.value)
-  // A bare component root has no siblings to keep, and its validation paths
-  // are wrap-relative (`items[0]` is the root itself after wrapping).
-  if (root === undefined || isComponentRoot(root)) return null
-  if (processed.declaredNativeCount <= 1) return null
+  if (root === undefined) return null
   const paths = new Set<string>()
+  const overhangPaths = new Set<string>()
   for (const error of processed.errors) {
     if (error.startsWith('spec exceeds ')) continue
     const nodePath = errorNodePath(error)
-    if (nodePath !== null) paths.add(nodePath)
+    if (nodePath === null) continue
+    if (error === `${nodePath}.details must not contain more entries than rows`) {
+      overhangPaths.add(nodePath)
+    } else paths.add(nodePath)
   }
-  if (paths.size === 0) return null
-  const pruned = cloneJsonValue(processed.value)
+  if (paths.size === 0 && overhangPaths.size === 0) return null
+  // Validation wraps a bare component first. Prune the same shape so its
+  // detail paths resolve even when the table is the only declared node.
+  const pruned = cloneJsonValue(isComponentRoot(root) ? wrapSingleComponentRoot(root) : root)
   if (pruned === null) return null
   // Resolve every slot BEFORE the first splice: each drop shifts the later
   // siblings of the same array, so a resolve-after-splice (deepest-first or
@@ -1602,9 +1612,24 @@ export function partialRepairGenuiSpec(processed: GenuiProcessResult): GenuiSpec
   // highest-index first keeps the remaining indexes valid (issue #190).
   const slots = [...paths]
     .map((path) => nodeSlotAt(pruned, path))
-    .filter((slot): slot is { array: unknown[]; index: number } => slot !== undefined)
+    .filter((slot): slot is NodeSlot => slot !== undefined)
+  const overhangSlots = [...overhangPaths]
+    .map((path) => nodeSlotAt(pruned, path))
+    .filter((slot): slot is NodeSlot => slot !== undefined)
+  // Extra details are unreachable. Mirror table repair's existing truncation
+  // only for this exact diagnostic, then validate the whole candidate again.
+  for (const { array, index } of overhangSlots) {
+    const table = obj(array[index])
+    if (table?.type === 'table' && Array.isArray(table.details)) {
+      table.details.length = Math.min(table.details.length, tableRowsForDetails(table).length)
+    }
+  }
   const byArray = new Map<unknown[], number[]>()
-  for (const { array, index } of slots) {
+  for (const { array, index, preserveIndex } of slots) {
+    if (preserveIndex) {
+      array[index] = null
+      continue
+    }
     const indexes = byArray.get(array)
     if (indexes === undefined) byArray.set(array, [index])
     else indexes.push(index)
