@@ -227,23 +227,22 @@ describe('planFenceFeedback: the bounds that prevent a retry storm', () => {
     expect(plan!.fingerprints).toEqual([fingerprint])
     expect(plan!.text).toContain('next=emit_fence_in_body')
     expect(plan!.text).toContain('status=fence_in_reasoning_only')
-    // The correction carries the body verbatim so the model only has to copy it
-    // (an answer that was asked again with a description replayed the previous
-    // reasoning byte-for-byte).
-    const withBody = planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, reasoningFenceRaw: BROKEN })
-    expect(withBody!.text).toContain('```dsh-ui')
-    expect(withBody!.text).toContain(BROKEN)
-    expect(withBody!.text).toContain('不要先写思考')
-    // A retry of the SAME body IS allowed: the model left a fine body in its
-    // thinking, and one real stall answered the retry with a byte-identical
-    // reasoning block — the ledger must not block the only retry that can land.
-    const again = planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, reasoningFenceRaw: BROKEN, corrected: new Set([fingerprint]) })
+    // The correction NEVER carries the draft: a fence in the reasoning block is
+    // not proof that the model chose to deliver it, and there may be several
+    // candidates (maintainer boundary on #236).
+    const reminder = planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint })
+    expect(reminder!.text).not.toContain('```')
+    expect(reminder!.text).not.toContain(BROKEN)
+    expect(reminder!.text).toContain('本轮尚未产生正式回答')
+    // A turn that already delivered text or a render_ui card is DONE.
+    expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, bodyDelivered: true })).toBeNull()
+    // A retry of the same fence identity is still allowed (the ledger must not
+    // eat the only retry that can land).
+    const again = planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, corrected: new Set([fingerprint]) })
     expect(again).not.toBeNull()
-    expect(again!.text).toContain('正文是空的')
-    expect(again!.text).toContain(BROKEN)
-    const second = planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, correctionsThisTurn: 1, reasoningFenceRaw: BROKEN })
-    expect(second!.text).toContain('第 2 次要求')
-    expect(second!.text).toContain(BROKEN)
+    const second = planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, correctionsThisTurn: 1 })
+    expect(second!.text).toContain('第 2 次提醒')
+
     // Bounds: the per-turn budget still applies.
     expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, aborted: true })).toBeNull()
     expect(planFenceFeedback({ ...base, text: '', reasoningFence: fingerprint, correctionsThisTurn: 2 })).toBeNull()
@@ -337,7 +336,7 @@ describe('installFenceFeedback wiring', () => {
     h.boundary({ agent, turn: 7, signal: new AbortController().signal })
     expect(h.steer).toHaveBeenCalledTimes(2)
     const retry = h.steer.mock.calls[1]![0] as { content: Array<{ text: string }> }
-    expect(retry.content[0]!.text).toContain('第 2 次要求')
+    expect(retry.content[0]!.text).toContain('第 2 次提醒')
     h.boundary({ agent, turn: 7, signal: new AbortController().signal })
     expect(h.steer).toHaveBeenCalledTimes(2)
   })
@@ -364,7 +363,7 @@ describe('installFenceFeedback wiring', () => {
     expect(h.steer).toHaveBeenCalledTimes(2)
     const second = h.steer.mock.calls[1]![0] as { content: Array<{ text: string }> }
     expect(second.content[0]!.text).toContain('next=emit_fence_in_body')
-    expect(second.content[0]!.text).toContain(STAT_GROUP)
+    expect(second.content[0]!.text).not.toContain(STAT_GROUP)
 
     // A third boundary in the same turn stays silent.
     h.boundary({ agent, turn: 9, signal: new AbortController().signal })

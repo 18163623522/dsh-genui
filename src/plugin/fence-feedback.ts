@@ -195,11 +195,17 @@ interface SessionFeedback {
   text: string
   /**
    * Fingerprint of the last `dsh-ui` fence seen ONLY in a reasoning block of
-   * this turn (empty string when none). Ask for it in the body at the boundary.
+   * this turn (empty string when none). Used as an identity for the one-shot
+   * bookkeeping only — the correction NEVER hands the draft back to the model.
    */
   reasoningFence: string
-  /** Raw body of that reasoning-only fence (handed back to the model verbatim). */
-  reasoningRaw: string
+  /**
+   * Whether this turn already delivered something formal: a non-empty body text
+   * or a `render_ui` tool call. "No fence in the body" is NOT "no answer" — a
+   * normal prose reply must never be turned into a UI request, and a delivered
+   * UI must never be republished.
+   */
+  bodyDelivered: boolean
   /** Fence fingerprints already corrected in this process. */
   corrected: Set<string>
   /** Turn that already received its one correction. */
@@ -225,8 +231,8 @@ export interface FenceFeedbackPlanInput {
    * in the message body, so no UI ever mounted.
    */
   readonly reasoningFence?: string | undefined
-  /** Raw body of that reasoning-only fence, handed back to the model verbatim. */
-  readonly reasoningFenceRaw?: string | undefined
+  /** Formal delivery already happened in this turn (text or render_ui). */
+  readonly bodyDelivered?: boolean | undefined
   /**
    * Corrections already steered in this turn. A turn gets
    * {@link MAX_CORRECTIONS_PER_TURN} attempts: the first corrects a fence that
@@ -263,6 +269,9 @@ export function planFenceFeedback(input: FenceFeedbackPlanInput): FenceFeedbackP
   // per-turn / per-fence accounting as a render failure.
   if (input.text.trim() === '') {
     if (reasoningFence === undefined) return null
+    // A turn that already delivered a body or a UI is DONE: never publish a
+    // reasoning draft on top of it (maintainer boundary on #236).
+    if (input.bodyDelivered === true) return null
     // Deliberately NOT gated on `corrected` here. That ledger exists to stop a
     // RENDER failure from being corrected twice, but this path is different:
     // the body is already fine — the model simply left it in its thinking. One
@@ -270,7 +279,7 @@ export function planFenceFeedback(input: FenceFeedbackPlanInput): FenceFeedbackP
     // the ledger blocked the only retry that could have landed. The per-turn
     // budget below is what bounds this path.
     return {
-      text: missingBodyCorrectionText(reasoningFence, input.reasoningFenceRaw, used + 1),
+      text: missingBodyCorrectionText(reasoningFence, used + 1),
       fingerprints: [reasoningFence],
       turn: input.turn,
     }
@@ -290,21 +299,14 @@ export function planFenceFeedback(input: FenceFeedbackPlanInput): FenceFeedbackP
  * @param fingerprint - fingerprint of that fence body.
  * @returns the message text to steer into the running turn.
  */
-export function missingBodyCorrectionText(fingerprint: string, body?: string, attempt = 1): string {
+export function missingBodyCorrectionText(fingerprint: string, attempt = 1): string {
   const head = `${MARKER_PREFIX}${fingerprint}]\n\n[genui-fence-repair]\nstatus=fence_in_reasoning_only\nfences=1\nnext=emit_fence_in_body\nrepeat_rendered_content=false\nreply_language=conversation\n\n`
-  const trimmed = body?.trim() ?? ''
-  // Handing back the exact body (not just a description of the requirement) is
-  // deliberate: one observed answer was byte-identical to the previous turn's
-  // reasoning, i.e. asked again the model replayed its plan. A different prompt
-  // with the concrete target breaks that pattern, and the model only has to
-  // copy it.
-  if (trimmed === '') {
-    return `${head}reasoning 里的 dsh-ui 围栏不会渲染（用户看不到）；把同一份围栏写进**回答正文**再结束本轮，别再重复解释。\n`
-  }
-  const why = attempt <= 1
-    ? '你上一条回答的**正文是空的**（围栏写在了 reasoning 里，用户什么都看不到）。'
-    : `这是第 ${attempt} 次要求：你已经连续把回答写在思考里、正文留空。`
-  return `${head}${why}\n**只输出下面这一段**：原样复制，不要改动、不要补解释、不要先写思考，输出完就结束本轮。\n\n\`\`\`dsh-ui\n${trimmed}\n\`\`\`\n`
+  // NEVER quote the draft itself: a fence in the reasoning block is not proof
+  // that the model chose to deliver it (there may be several candidates, or a
+  // later one may supersede it). The reminder only says "nothing has been
+  // delivered yet" and leaves the choice to the model.
+  const emphasis = attempt <= 1 ? '' : `（第 ${attempt} 次提醒）`
+  return `${head}本轮尚未产生正式回答，也没有通过支持的通道交付结果${emphasis}。请根据用户当前请求完成正式答复；需要 UI 时，在回答正文输出你最终选定的 dsh-ui 围栏，或明确调用 render_ui。可以修改或放弃此前候选；不能完成时，请在正文说明原因。\n`
 }
 
 /** Text of one assistant message's text blocks, in order. */
@@ -318,6 +320,30 @@ function textOfContent(content: unknown): string {
     })
     .filter(part => part !== '')
     .join('\n')
+}
+
+/** Tool whose successful call IS a formal delivery. */
+const DELIVERY_TOOL = 'render_ui'
+
+/**
+ * Whether one assistant message already delivered something formal.
+ *
+ * Deliberately narrow: a non-empty text block, or a `render_ui` call. Other
+ * tools (validate_dsh_ui, bash, …) may succeed without producing any answer, so
+ * they are NOT counted as delivery.
+ *
+ * @param content - assistant content blocks.
+ * @returns true when this message delivered a body or a UI.
+ */
+function deliveredSomething(content: unknown): boolean {
+  if (!Array.isArray(content)) return false
+  return content.some(block => {
+    if (typeof block !== 'object' || block === null) return false
+    const record = block as { type?: unknown; text?: unknown; name?: unknown }
+    if (record.type === 'text') return typeof record.text === 'string' && record.text.trim() !== ''
+    if (record.type === 'tool-call') return record.name === DELIVERY_TOOL
+    return false
+  })
 }
 
 /** Text of one assistant message's reasoning blocks, in order. */
@@ -370,7 +396,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
   const stateOf = (sessionId: string): SessionFeedback => {
     let state = sessions.get(sessionId)
     if (state === undefined) {
-      state = { text: '', reasoningFence: '', reasoningRaw: '', corrected: new Set(), lastCorrectedTurn: undefined, correctionsThisTurn: 0, correctionsTurn: undefined }
+      state = { text: '', reasoningFence: '', bodyDelivered: false, corrected: new Set(), lastCorrectedTurn: undefined, correctionsThisTurn: 0, correctionsTurn: undefined }
       sessions.set(sessionId, state)
     }
     return state
@@ -390,6 +416,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
         const state = stateOf(sessionId)
         state.text = text
         state.reasoningFence = ''
+        state.bodyDelivered = deliveredSomething(content)
         return
       }
       // No fence in the body. If the reasoning block composed one, remember it:
@@ -399,7 +426,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
       const state = stateOf(sessionId)
       state.text = ''
       state.reasoningFence = composed === undefined ? '' : fenceFingerprint(composed.raw)
-      state.reasoningRaw = composed === undefined ? '' : composed.raw
+      state.bodyDelivered = deliveredSomething(content)
       return
     }
     if (event.type !== 'user/message') return
@@ -418,7 +445,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
     if (state !== undefined) {
       state.text = ''
       state.reasoningFence = ''
-      state.reasoningRaw = ''
+      state.bodyDelivered = false
     }
   })
 
@@ -436,7 +463,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
       corrected: state.corrected,
       aborted: signal.aborted,
       reasoningFence: state.reasoningFence === '' ? undefined : state.reasoningFence,
-      reasoningFenceRaw: state.reasoningRaw === '' ? undefined : state.reasoningRaw,
+      bodyDelivered: state.bodyDelivered,
       correctionsThisTurn: usedThisTurn,
     })
     if (plan === null) return
