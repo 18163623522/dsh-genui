@@ -96,7 +96,7 @@ The repository ships both renderer channels, the host plugin, and the built brow
 
 Prerequisites — all required:
 
-1. **dsh `^0.1.2-rc.1 || ^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || >=0.2.0-rc.1 <0.3.0-0`** (DSH `0.2.0-rc.1` is currently a prerelease; verified host roles: minimum `dsh-v0.1.2-rc.1`, current `dsh-v0.1.7-rc.2`, next `dsh-v0.2.0-rc.1`; users on DSH `<=0.1.1-rc.x` should use dsh-genui `0.9.8`)
+1. **dsh `^0.1.2-rc.1 || ^0.1.5-alpha.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1 || >=0.2.0-rc.1 <0.3.0-0`** (DSH `0.2.0-rc.1` is currently a prerelease; verified host roles: minimum `dsh-v0.1.2-rc.1`, current `dsh-v0.1.7-rc.2`, next `dsh-v0.2.0-rc.2`; users on DSH `<=0.1.1-rc.x` should use dsh-genui `0.9.8`)
 2. **`pnpm` on your PATH**: the `dsh plugin` command depends on it. If missing: `corepack enable` (or `npm i -g pnpm`), then **open a new terminal** and confirm `pnpm -v` prints a version
 
 Install and activate in DSH (one command, all dependencies included):
@@ -115,6 +115,12 @@ npm install @changfenhuang/dsh-genui
 > `npm install` only adds the dependency; it does not register the plugin with DSH. Use `dsh plugin add` above when installing it into DSH.
 
 > ⚠️ **Don't use `link:` on a freshly cloned directory** — `link:` does not install the plugin's dependencies (mermaid / three / react), so the renderer will break. Use the npm command above for normal installation; reserve `link:` for local development iteration (see below).
+
+### Package name and version matter
+
+- **The scope matters**: npm also hosts a same-named, unscoped [`dsh-genui`](https://www.npmjs.com/package/dsh-genui) (a Vue/OpenTiny implementation by a different maintainer, unrelated to this repo). If an install listing describes "interactive charts, forms, calculators, dashboards, and mini apps", that is the other project — the host will reject it over incompatible peers. This plugin is always **`@changfenhuang/dsh-genui`**.
+- **When the host rejects the install**: the supported host range is declared in peerDependencies and enforced by the host — upgrade to the `latest` plugin version on npm and reinstall; no other config changes are needed.
+- **When the resolved version is older than `latest`**: this is usually pnpm's release-age policy (versions published within the last 24 hours are silently skipped). Wait a day and retry, or add the target version to `minimumReleaseAgeExclude` in the profile's `pnpm-workspace.yaml`; if the profile exact-pins an old version, update the declaration first, then reinstall.
 
 ### Migrating from the old `@omdsh-dev` package name
 
@@ -163,7 +169,8 @@ The following is the detailed capability reference. Every behavior is constraine
 - **ECharts integration**: the `echart` node renders full ECharts charts with theme-aware colors, tooltips, and legends. Two modes: **preset shorthand** (`preset: 'bar' | 'line' | 'area' | 'pie' | 'scatter'` + `data`/`series`) for quick upgrade from the `chart` node, or **full option** (`option` field) for custom chart types, dataZoom, visualMap, and other advanced ECharts features. The echarts engine (~1 MB) is lazy-loaded on demand — the main bundle never carries it, and conversations without `echart` nodes never download it- **Function plots**: `plot` draws curves; parameter sliders redraw in real time, with optional auto-animation
 
 - **Quiz**: `quiz` grades on click with explanation and retry; with `action`, the answer is also sent back to the model (grading stays local and instant)
-- **Local grading (submit)**: a multiple-choice set = one `radio` per question with `group` + `answer` (correct answer) + `explanation`, plus one `submit` button — after the user answers everything and clicks once, **the score, per-question right/wrong, and explanations appear right in the UI with zero model round-trips**; the quiz then locks, and "retake" resets locally (optional `resetAction` notifies the model). Questions without an answer fall back to an aggregated action (`fields` collects every input with an `id`)
+- **Local grading (submit)**: a multiple-choice set uses one `radio` per question with `group` + `answer` + `explanation` and a `submit` button. Once the required radio members are answered, grading appears in the UI when no other collected block state needs delivery. An aggregated action sends `answers`, optional `fields`, `total`, and `answered` in other cases.
+- **Submit groups**: `groups` names submission member keys from `radio.group`, `checkbox.group`, `input.id`, `textarea.id`, `select.id`, and `slider.id`. A radio needs a selection, a checkbox group needs at least one selection, and a field needs a value that remains after trimming. `groups` controls required members and progress; the payload still collects filled form state across the block. Without `groups`, any answered member enables submission.
 - **State persistence**: answers, submission locks, and input values are saved per "session + content fingerprint" — refresh or reopen restores everything; re-rendering identical content keeps user state; new content starts fresh; LRU cap of 200 blocks
 - **Form semantics**: `input` Enter / `textarea` Ctrl+Enter submits immediately (`submit:true`), no blur needed; fields with an `id` are collected into the submit's `fields`
 - **Secrets ban**: GenUI must never ask for passwords, API keys, access tokens, recovery codes, or other secrets; even if a password input appears, it stays masked, is never persisted, and never enters form collection
