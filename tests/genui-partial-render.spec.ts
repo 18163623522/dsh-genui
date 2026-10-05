@@ -59,6 +59,19 @@ describe('partial fence rendering (issue #186)', () => {
     const raw = '{"items":[{"type":"text","content":"好"}]}'
     expect(partialRepairGenuiSpec(processGenuiSpec(JSON.parse(raw)))).toEqual(fenceSpec(raw))
   })
+
+  it('renders the only declared node next to undeclared junk siblings (issue #254)', () => {
+    // 真实样本：模型漏了 keyvalue 包装，把两个 pair 对象直接放进 items。杂项
+    // 没有 type，不计入 declaredNativeCount —— 部分修复剪掉的是杂项，唯一合法
+    // 的 table 必须存活，不能被「声明数 ≤ 1」连坐（#253 已删该早退）。
+    const raw = '{"items":[{"type":"table","columns":["Item","Qty"],"rows":[["a","1"],["b","2"]]},{"key":"k1","value":"v1"},{"key":"k2","value":"v2"}]}'
+    const processed = processGenuiSpec(JSON.parse(raw))
+    expect(processed.declaredNativeCount).toBe(1)
+    expect(processed.errors).toEqual(["items[1]: missing string 'type'", "items[2]: missing string 'type'"])
+    const spec = fenceSpec(raw)
+    expect(spec).not.toBeNull()
+    expect(spec!.items).toEqual([{ type: 'table', columns: ['Item', 'Qty'], rows: [['a', '1'], ['b', '2']] }])
+  })
 })
 
 describe('empty tabs (issue #215)', () => {
