@@ -189,12 +189,39 @@ function infostringOf(block: Element): 'dsh-ui' | 'svg' | null {
   return null
 }
 
-const GENERIC_CODE_LABELS = new Set(['Code', 'Code block', '代码块'])
+/**
+ * 已知**真实语言标识符**的闭集：语言 id 有限、由本插件维护，白名单列它是对的。
+ * 反例——宿主各语言里通用代码块标题的叫法（`Code` / `代码块` / «Код» / Código /
+ * Codice / Kode …）——是**无界集合**，白名单永远列不全：旧实现 `GENERIC_CODE_LABELS`
+ * 只列了英/中两种，宿主 locale 为其它语言时本地化标题被当成真语言，围栏永远不被
+ * 接管（issue #258）。因此判定反转：标签命中本集合才视为「带语言」，其余（空标签、
+ * 本地化通用词）一律视为「无语言」，由 {@link isGenericGenuiFence} 的内容校验把关——
+ * 同一份正文的渲染结果不因宿主语言而不同。
+ */
+const KNOWN_LANGUAGE_LABELS = new Set([
+  // 插件自有语言
+  'dsh-ui', 'svg',
+  // 数据 / 标记 / 纯文本
+  'json', 'json5', 'yaml', 'yml', 'toml', 'ini', 'xml', 'html', 'css', 'scss', 'sass', 'less',
+  'markdown', 'md', 'text', 'txt', 'plain', 'plaintext', 'log', 'console', 'diff', 'patch',
+  // 助手回复里常见的编程语言
+  'js', 'jsx', 'javascript', 'ts', 'tsx', 'typescript', 'python', 'py', 'bash', 'sh', 'shell', 'zsh',
+  'sql', 'graphql', 'gql', 'rust', 'go', 'golang', 'java', 'kotlin', 'kt', 'swift', 'scala', 'dart',
+  'c', 'h', 'cpp', 'c++', 'cxx', 'cs', 'csharp', 'php', 'ruby', 'rb', 'perl', 'lua', 'r', 'matlab',
+  'haskell', 'hs', 'elixir', 'ex', 'erlang', 'clojure', 'clj', 'groovy', 'objc', 'objective-c',
+  'dockerfile', 'docker', 'makefile', 'make', 'cmake', 'protobuf', 'proto',
+])
 
-/** Read a language that the host still exposes in its CodeBlock banner. */
+/**
+ * Read a language that the host still exposes in its CodeBlock banner.
+ *
+ * 只有标签命中 {@link KNOWN_LANGUAGE_LABELS} 才返回语言；空标签与本地化通用词
+ * （«Код» / Código / 代码块 …）是宿主的**呈现文案**、不是语义，一律返回 null——
+ * 此前它们会被当成真语言，连 ChatSnapshot 来源都被短路（issue #258）。
+ */
 function domLanguageOf(block: Element): string | null {
   const label = labelTextOf(block)
-  return label === '' || GENERIC_CODE_LABELS.has(label) ? null : label
+  return label !== '' && KNOWN_LANGUAGE_LABELS.has(label.toLowerCase()) ? label : null
 }
 
 /** The banner label's raw text (empty while streaming — the host renders the
@@ -216,7 +243,8 @@ function labelTextOf(block: Element): string {
  * 规范时，恢复丢失的围栏语言。
  *
  * 宿主会隐去它不认识的语言（高亮器不支持 `dsh-ui`），于是同一份围栏在 DOM 里表现为
- * 一个「代码块/Code block」标签的普通代码块；ChatSnapshot 的语言来源在部分行上不可用
+ * 一个通用标题的普通代码块（标题随宿主 locale 本地化：`Code` / `代码块` / «Код» …）；
+ * ChatSnapshot 的语言来源在部分行上不可用
  * 时，内容识别是唯一出路。此前这里要求 `JSON.parse(raw)` 直接通过，导致**正文只差一个
  * 未转义引号（tier-1 能修）的围栏永远不会被接管**——用户看到一个能渲染却始终是代码块的
  * 围栏（真实会话 seq 40530：正文经 tier-1 修 14 处后可渲染，界面却停在代码块）。
@@ -230,8 +258,9 @@ function labelTextOf(block: Element): string {
 function isGenericGenuiFence(block: Element, raw: string): boolean {
   const row = block.closest<HTMLElement>(ASSISTANT_FLOW_ROW)
   if (row === null || row.dataset.chatGroupPart === 'reasoning') return false
+  // domLanguageOf 已反转（#258）：banner 是已知真实语言 ⇒ 不是通用块；空标签或
+  // 本地化通用词 ⇒ null，进入内容校验。这里不再要求标题命中任何白名单。
   if (domLanguageOf(block) !== null || !block.querySelector('[data-code-block-banner]')) return false
-  if (!GENERIC_CODE_LABELS.has(labelTextOf(block))) return false
   const repaired = repairFenceJson(raw)
   const candidate = repaired === null ? raw : repaired.text
   let value: unknown

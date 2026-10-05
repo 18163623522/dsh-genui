@@ -128,7 +128,9 @@ afterEach(() => {
 })
 
 describe('installDomFenceRenderer', () => {
-  it.each(['Code', 'Code block', '代码块'])('renders canonical GenUI from a generic %s banner', async label => {
+  it.each(['Code', 'Code block', '代码块', 'Код', 'Código', 'Codice', 'Kode'])('renders canonical GenUI from a generic %s banner', async label => {
+    // 标签集合刻意跨语系：本地化通用标题是宿主呈现文案，不是语言（issue #258）——
+    // 旧白名单只列英/中，俄语等 locale 下同一份围栏永远停在代码块。
     const row = assistantRow('generic-valid')
     const block = genericCodeBlock(VALID_SPEC, label)
     row.appendChild(block)
@@ -205,6 +207,21 @@ describe('installDomFenceRenderer', () => {
     row.appendChild(block)
     document.body.appendChild(row)
     const dispose = installDomFenceRenderer(makeModernCtx('explicit-session'), () => {})
+    try {
+      await tick()
+      expect(block.hasAttribute('data-genui-rendered')).toBe(false)
+      expect(row.querySelector('.genui-dom-fence')).toBeNull()
+    } finally { dispose() }
+  })
+
+  it.each(['json', 'JSON', 'python'])('keeps a banner-labeled %s block even with the generic banner marker', async language => {
+    // 反转后的 domLanguageOf（#258）：banner 标注了已知真实语言 ⇒ 明确不是通用块，
+    // 即使宿主同时给了 data-code-block-banner 也不内容接管（大小写不敏感）。
+    const row = assistantRow(`banner-language-${language}`)
+    const block = genericCodeBlock(VALID_SPEC, language)
+    row.appendChild(block)
+    document.body.appendChild(row)
+    const dispose = installDomFenceRenderer(makeModernCtx('banner-language-session'), () => {})
     try {
       await tick()
       expect(block.hasAttribute('data-genui-rendered')).toBe(false)
