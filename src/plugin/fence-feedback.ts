@@ -200,10 +200,17 @@ interface SessionFeedback {
    */
   validatedThisTurn: boolean
   /**
-   * The turn delivered something formal: a non-empty body text or a `render_ui`
-   * call. "No fence in the body" is NOT "no answer".
+   * The turn delivered something formal: a non-empty body text, or a
+   * `render_ui` call whose RESULT reports success. A failed render is not an
+   * answer, and a call whose result has not arrived yet proves nothing.
    */
   deliveredThisTurn: boolean
+  /**
+   * `render_ui` calls of this turn whose result has not arrived yet. The
+   * result — not the call — decides delivery, so an outstanding call blocks
+   * steering at the boundary instead of being guessed about.
+   */
+  pendingRenders: Set<string>
   /** Fence fingerprints already corrected for a RENDER failure. */
   correctedSpec: Set<string>
   /**
@@ -229,7 +236,7 @@ export interface FenceFeedbackPlanInput {
   readonly deliveryRemindedTurns?: ReadonlySet<number> | undefined
   /** A `validate_dsh_ui` call happened this turn (formal GenUI signal). */
   readonly validatedThisTurn?: boolean | undefined
-  /** The turn already delivered a body or a `render_ui` card. */
+  /** The turn already delivered a body or a successful `render_ui` result. */
   readonly deliveredThisTurn?: boolean | undefined
   readonly aborted: boolean
   /** Corrections already steered in this turn (shared hard cap). */
@@ -257,7 +264,8 @@ export interface FenceFeedbackPlan {
  * testable without a host.
  *
  * The decision is driven by FORMAL events only: fences in the reply body, a
- * `validate_dsh_ui` call, a delivered body or `render_ui`. The reasoning block is
+ * `validate_dsh_ui` call, a delivered body text or a successful `render_ui`
+ * result. The reasoning block is
  * never read here — a draft inside the thinking block is not proof that the model
  * chose to deliver it, so it must not change any decision.
  *
@@ -312,27 +320,27 @@ function textOfContent(content: unknown): string {
     .join('\n')
 }
 
-/** Tool whose successful call IS a formal delivery. */
+/** Tool whose SUCCESSFUL result is a formal delivery. */
 const DELIVERY_TOOL = 'render_ui'
 
 /**
- * Whether one assistant message already delivered something formal.
+ * Whether one assistant message delivered a non-empty body text.
  *
- * Deliberately narrow: a non-empty text block, or a `render_ui` call. Other
- * tools (validate_dsh_ui, bash, …) may succeed without producing any answer, so
+ * Deliberately narrow: a non-empty text block. A `render_ui` call is decided
+ * by its `tool/result`, not by the call appearing in a message — a call that
+ * failed (or whose result has not arrived) is not a delivery. Other tools
+ * (validate_dsh_ui, bash, …) may succeed without producing any answer, so
  * they are NOT counted as delivery.
  *
  * @param content - assistant content blocks.
- * @returns true when this message delivered a body or a UI.
+ * @returns true when this message delivered a body text.
  */
-function deliveredSomething(content: unknown): boolean {
+function deliveredBodyText(content: unknown): boolean {
   if (!Array.isArray(content)) return false
   return content.some(block => {
     if (typeof block !== 'object' || block === null) return false
-    const record = block as { type?: unknown; text?: unknown; name?: unknown }
-    if (record.type === 'text') return typeof record.text === 'string' && record.text.trim() !== ''
-    if (record.type === 'tool-call') return record.name === DELIVERY_TOOL
-    return false
+    const record = block as { type?: unknown; text?: unknown }
+    return record.type === 'text' && typeof record.text === 'string' && record.text.trim() !== ''
   })
 }
 
@@ -378,6 +386,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
         text: '',
         validatedThisTurn: false,
         deliveredThisTurn: false,
+        pendingRenders: new Set(),
         correctedSpec: new Set(),
         deliveryRemindedTurns: new Set(),
         correctionsThisTurn: 0,
@@ -392,8 +401,23 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
     sessions.delete(String(session.id))
   })
 
+  const resetTurnState = (state: SessionFeedback): void => {
+    state.text = ''
+    state.validatedThisTurn = false
+    state.deliveredThisTurn = false
+    state.pendingRenders.clear()
+  }
+
   ctx.on('session/event', (session, event: SessionEvent) => {
     const sessionId = String(session.id)
+    if (event.type === 'turn/start') {
+      // The formal turn boundary: whatever happened in the previous turn is
+      // settled and this turn starts clean. The `user/message` reset below is
+      // only a fallback for direct prompts.
+      const state = sessions.get(sessionId)
+      if (state !== undefined) resetTurnState(state)
+      return
+    }
     if (event.type === 'assistant/message') {
       const content = (event.data as { message?: { content?: unknown } }).message?.content
       const text = textOfContent(content)
@@ -401,15 +425,40 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
       // Fences are read from the BODY only: a draft in the reasoning block is not
       // a delivery and must not become one.
       state.text = extractDshUiFences(text).length > 0 ? text : ''
-      // Delivery is sticky for the turn: once a body or a render_ui card exists,
-      // the turn has answered and must never be corrected into publishing again.
-      state.deliveredThisTurn = state.deliveredThisTurn || deliveredSomething(content)
+      // Delivery is sticky for the turn: once a body text exists, the turn has
+      // answered and must never be corrected into publishing again. A
+      // `render_ui` call in the content proves nothing here — its result does.
+      state.deliveredThisTurn = state.deliveredThisTurn || deliveredBodyText(content)
       return
     }
     if (event.type === 'tool/call') {
+      const data = event.data as { name?: unknown; callId?: unknown }
+      const state = stateOf(sessionId)
       // validate_dsh_ui is the FORMAL signal that this turn is GenUI-related.
-      const name = (event.data as { name?: unknown }).name
-      if (name === 'validate_dsh_ui') stateOf(sessionId).validatedThisTurn = true
+      if (data.name === 'validate_dsh_ui') state.validatedThisTurn = true
+      // The result — not the call — decides whether render_ui delivered.
+      if (data.name === DELIVERY_TOOL && typeof data.callId === 'string') {
+        state.pendingRenders.add(data.callId)
+      }
+      return
+    }
+    if (event.type === 'tool/result') {
+      const data = event.data as {
+        message?: { content?: unknown }
+        error?: unknown
+      }
+      const content = data.message?.content
+      const block = Array.isArray(content)
+        ? content.find(part => typeof part === 'object' && part !== null && (part as { type?: unknown }).type === 'tool-result') as { toolCallId?: unknown; isError?: unknown } | undefined
+        : undefined
+      const callId = typeof block?.toolCallId === 'string' ? block.toolCallId : undefined
+      if (callId === undefined || block === undefined) return
+      const state = stateOf(sessionId)
+      if (!state.pendingRenders.delete(callId)) return
+      // Success = no internal failure identity AND the model-facing block is
+      // not an error. Anything else leaves the turn undelivered so the
+      // boundary can remind (a failed card is not an answer).
+      if (data.error === undefined && block.isError !== true) state.deliveredThisTurn = true
       return
     }
     if (event.type !== 'user/message') return
@@ -423,13 +472,14 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
       for (const fingerprint of fingerprints) state.correctedSpec.add(fingerprint)
       return
     }
-    // A genuine user prompt starts a new turn: the previous reply is settled.
+    // A DIRECT human prompt starts a new turn: the previous reply is settled.
+    // Synthetic context that rides the same user surface — `agent.inject()`
+    // notices, team member messages — carries a different source kind and
+    // arrives MID-TURN: resetting here used to wipe the turn's validation and
+    // delivery state before the boundary could use it.
+    if (data.source?.kind !== 'user') return
     const state = sessions.get(sessionId)
-    if (state !== undefined) {
-      state.text = ''
-      state.validatedThisTurn = false
-      state.deliveredThisTurn = false
-    }
+    if (state !== undefined) resetTurnState(state)
   })
 
   ctx.on('agent/turn-stopping', ({ agent, turn, signal }): void => {
@@ -438,6 +488,10 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
     if (agent.session.header.parentSession !== undefined) return
     const state = sessions.get(String(agent.session.id))
     if (state === undefined) return
+    // A render_ui result still outstanding could deliver (or fail) after this
+    // boundary fires: steering now would race the late result, so stay silent
+    // and let the next boundary decide on settled facts.
+    if (state.pendingRenders.size > 0) return
     const usedThisTurn = state.correctionsTurn === turn ? state.correctionsThisTurn : 0
     const plan = planFenceFeedback({
       text: state.text,
