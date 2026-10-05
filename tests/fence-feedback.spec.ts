@@ -314,7 +314,24 @@ describe('installFenceFeedback wiring', () => {
     expect(h.steer).toHaveBeenCalledTimes(1)
   })
 
-  const toolCallEvent = (name: string): unknown => ({ type: 'tool/call', seq: 4, time: 2, data: { name } }) as unknown as SessionEvent
+  const toolCallEvent = (name: string, callId?: string): unknown =>
+    ({ type: 'tool/call', seq: 4, time: 2, data: callId === undefined ? { name } : { name, callId } }) as unknown as SessionEvent
+  const toolResultEvent = (callId: string, failure?: { internal?: boolean; blockError?: boolean }): unknown => ({
+    type: 'tool/result',
+    seq: 6,
+    time: 3,
+    data: {
+      message: { content: [{ type: 'tool-result', toolCallId: callId, isError: failure?.blockError === true }] },
+      ...(failure?.internal === true ? { error: { name: 'ToolError', code: 'render_failed' } } : {}),
+    },
+  }) as unknown as SessionEvent
+  const contextMessageEvent = (kind: string): unknown => ({
+    type: 'user/message',
+    seq: 8,
+    time: 4,
+    data: { content: [{ type: 'text', text: '文件已变更' }], source: { kind } },
+  }) as unknown as SessionEvent
+  const turnStartEvent = (turn: number): unknown => ({ type: 'turn/start', seq: 1, time: 0, data: { turn } }) as unknown as SessionEvent
   const reasoningEvent = (text: string): unknown => ({
     type: 'assistant/message',
     seq: 5,
@@ -360,7 +377,7 @@ describe('installFenceFeedback wiring', () => {
     expect(decisions).toEqual([1, 1, 1])
   })
 
-  it('stays silent when the turn delivered a body or a render_ui card', () => {
+  it('stays silent when the turn delivered a body or a successful render_ui result', () => {
     const delivered = harness()
     delivered.emitSession(userEvent())
     delivered.emitSession(toolCallEvent('validate_dsh_ui'))
@@ -369,12 +386,82 @@ describe('installFenceFeedback wiring', () => {
     delivered.boundary({ agent, turn: 8, signal: new AbortController().signal })
     expect(delivered.steer).not.toHaveBeenCalled()
 
+    // render_ui 只由它的 tool/result 决定交付：结果成功才算（此前仅凭调用就算，
+    // 失败的渲染卡也被当成已交付 — review 确认的漏补救之一）。
     const card = harness()
     card.emitSession(userEvent())
-    card.emitSession(toolCallEvent('render_ui'))
+    card.emitSession(toolCallEvent('validate_dsh_ui'))
+    card.emitSession(toolCallEvent('render_ui', 'render-1'))
     card.emitSession({ type: 'assistant/message', seq: 7, time: 4, data: { message: { content: [{ type: 'tool-call', name: 'render_ui', arguments: '{}' }] } } } as unknown as SessionEvent)
+    card.emitSession(toolResultEvent('render-1'))
     card.boundary({ agent: { session: { id: 'sess-1', header: { id: 'sess-1', version: 4 } }, steer: card.steer }, turn: 9, signal: new AbortController().signal })
     expect(card.steer).not.toHaveBeenCalled()
+  })
+
+  it('does not count a FAILED render_ui result as delivery', () => {
+    for (const failure of [{ internal: true }, { blockError: true }]) {
+      const h = harness()
+      h.emitSession(userEvent())
+      h.emitSession(toolCallEvent('validate_dsh_ui'))
+      h.emitSession(toolCallEvent('render_ui', 'render-fail'))
+      h.emitSession(toolResultEvent('render-fail', failure))
+      const agent = { session: { id: 'sess-1', header: { id: 'sess-1', version: 4 } }, steer: h.steer }
+      h.boundary({ agent, turn: 5, signal: new AbortController().signal })
+      expect(h.steer).toHaveBeenCalledTimes(1)
+      const message = h.steer.mock.calls[0]![0] as { content: Array<{ text: string }> }
+      expect(message.content[0]!.text).toContain('status=nothing_delivered')
+    }
+  })
+
+  it('stays silent while a render_ui result is outstanding, then decides on the result', () => {
+    const h = harness()
+    h.emitSession(userEvent())
+    h.emitSession(toolCallEvent('validate_dsh_ui'))
+    h.emitSession(toolCallEvent('render_ui', 'render-late'))
+    const agent = { session: { id: 'sess-1', header: { id: 'sess-1', version: 4 } }, steer: h.steer }
+    // Result not arrived yet: steering here would race the late result.
+    h.boundary({ agent, turn: 6, signal: new AbortController().signal })
+    expect(h.steer).not.toHaveBeenCalled()
+    // The result settles as failed: the next boundary can remind.
+    h.emitSession(toolResultEvent('render-late', { blockError: true }))
+    h.boundary({ agent, turn: 6, signal: new AbortController().signal })
+    expect(h.steer).toHaveBeenCalledTimes(1)
+    const message = h.steer.mock.calls[0]![0] as { content: Array<{ text: string }> }
+    expect(message.content[0]!.text).toContain('status=nothing_delivered')
+  })
+
+  it('does not let synthetic same-turn context messages clear the turn state', () => {
+    // agent.inject() 通知、成员消息等同面上下文走 user/message 但 source.kind
+    // 不是 'user'：它们到达于回合中途，不得清掉验证/交付状态（review 确认的
+    // 漏补救之二）。真实用户提示（kind 'user'）仍开启干净的新回合。
+    for (const kind of ['tool', 'agent', 'member']) {
+      const h = harness()
+      h.emitSession(userEvent())
+      h.emitSession(toolCallEvent('validate_dsh_ui'))
+      h.emitSession(contextMessageEvent(kind))
+      const agent = { session: { id: 'sess-1', header: { id: 'sess-1', version: 4 } }, steer: h.steer }
+      h.boundary({ agent, turn: 3, signal: new AbortController().signal })
+      expect(h.steer).toHaveBeenCalledTimes(1)
+      const message = h.steer.mock.calls[0]![0] as { content: Array<{ text: string }> }
+      expect(message.content[0]!.text).toContain('status=nothing_delivered')
+    }
+  })
+
+  it('resets the turn state on the formal turn/start boundary', () => {
+    const h = harness()
+    h.emitSession(turnStartEvent(1))
+    h.emitSession(userEvent())
+    h.emitSession(toolCallEvent('validate_dsh_ui'))
+    const agent = { session: { id: 'sess-1', header: { id: 'sess-1', version: 4 } }, steer: h.steer }
+    h.boundary({ agent, turn: 1, signal: new AbortController().signal })
+    expect(h.steer).toHaveBeenCalledTimes(1)
+    // New turn: turn/start wiped the state, so a fresh validate + nothing
+    // delivered can be reminded again under a new turn number.
+    h.emitSession(turnStartEvent(2))
+    h.emitSession(userEvent())
+    h.emitSession(toolCallEvent('validate_dsh_ui'))
+    h.boundary({ agent, turn: 2, signal: new AbortController().signal })
+    expect(h.steer).toHaveBeenCalledTimes(2)
   })
 
   it('keeps the delivery ledger separate from the render-failure ledger', () => {
