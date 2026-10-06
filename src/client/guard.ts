@@ -728,11 +728,6 @@ function repairListItems(
       continue
     }
     const o = obj(item)
-    const title = o === undefined ? undefined : str(o.title, GENUI_LIMITS.maxString)
-    if (title !== undefined) {
-      out.push({ title, ...opt('desc', o === undefined ? undefined : str(o.desc, GENUI_LIMITS.maxString) ?? str(o.description, GENUI_LIMITS.maxString)) })
-      continue
-    }
     if (o !== undefined && typeof o.type === 'string') {
       // Typed children are GenuiNodes: charge them against the shared node
       // budget (module header promise — exhausted budget elides remaining
@@ -742,6 +737,11 @@ function repairListItems(
       ctx.remaining -= 1
       const node = repairNode(o, ctx, depth)
       if (node !== null) out.push(node)
+      continue
+    }
+    const title = o === undefined ? undefined : str(o.title, GENUI_LIMITS.maxString)
+    if (title !== undefined) {
+      out.push({ title, ...opt('desc', str(o?.desc, GENUI_LIMITS.maxString)) })
     }
   }
   return out

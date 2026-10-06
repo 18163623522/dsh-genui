@@ -439,14 +439,14 @@ describe('repairGenuiSpec: list nodes', () => {
     ])
   })
 
-  it('prefers the title form when an object carries both title and type', () => {
+  it('treats an object with both title and type as a typed node', () => {
     const spec = repairGenuiSpec({
       items: [
         { type: 'list', items: [{ title: 'T', desc: 'D', type: 'badge', label: 'B' }] },
       ],
     })
     const [list] = spec!.items as Array<{ items: GenuiList['items'] }>
-    expect(list.items).toEqual([{ title: 'T', desc: 'D' }])
+    expect(list.items).toEqual([{ type: 'badge', label: 'B' }])
   })
 
   it('countGenuiNodes includes typed list children', () => {
