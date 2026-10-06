@@ -4,7 +4,9 @@
 // one correction per turn, one per fence body, never for subagents, never for
 // an aborted turn, and accounting before the steer.
 import { describe, expect, it, vi } from 'vitest'
-import type { Context } from '@deepseek-ai/cordis'
+import { Context } from '@deepseek-ai/cordis'
+import { markAgentLoopRequest } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   createFeedbackMessage,
@@ -46,6 +48,50 @@ interface Harness {
   boundary: (payload: unknown) => void
   steer: ReturnType<typeof vi.fn>
   listeners: Map<string, (payload: unknown, ...rest: unknown[]) => unknown>
+}
+
+interface StreamHarness {
+  emitSession: (event: SessionEvent) => void
+  stream: (options: GenerateOptions, chunks: readonly StreamChunk[]) => AsyncIterable<StreamChunk>
+}
+
+/** 根据标准 LLM chunk 构造可重复的测试 stream。 */
+async function* streamChunks(chunks: readonly StreamChunk[]): AsyncGenerator<StreamChunk> {
+  yield* chunks
+}
+
+/** 收集 middleware 结果，以检查终止 finish。 */
+async function collectChunks(source: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> {
+  const chunks: StreamChunk[] = []
+  for await (const chunk of source) chunks.push(chunk)
+  return chunks
+}
+
+/** 使用 agent loop 的公开标记标识请求。 */
+function agentRequest(overrides: Partial<GenerateOptions> = {}): GenerateOptions {
+  return markAgentLoopRequest({
+    provider: 'test-provider',
+    model: 'test-model',
+    messages: [],
+    sessionId: 'sess-1' as NonNullable<GenerateOptions['sessionId']>,
+    ...overrides,
+  })
+}
+
+/** 使用真实 Cordis Context 注册 session event 与 LLM stream middleware。 */
+function streamHarness(options: { parentSession?: string; enabled?: boolean } = {}): StreamHarness {
+  const ctx = new Context()
+  const session = {
+    id: 'sess-1',
+    header: options.parentSession === undefined
+      ? { id: 'sess-1' }
+      : { id: 'sess-1', parentSession: options.parentSession },
+  }
+  installFenceFeedback(ctx, options.enabled ?? true)
+  return {
+    emitSession: event => ctx.emit('session/event', session as never, event),
+    stream: (request, chunks) => ctx.waterfall('llm/stream', request, () => streamChunks(chunks)),
+  }
 }
 
 function harness(options: { parentSession?: string; enabled?: boolean } = {}): Harness {
@@ -295,9 +341,16 @@ describe('the steered correction message', () => {
 })
 
 describe('installFenceFeedback wiring', () => {
-  it('is inert when explicitly disabled', () => {
+  it('keeps stream recovery active and disables same-turn steering when configured off', () => {
     const h = harness({ enabled: false })
-    expect(h.listeners.size).toBe(0)
+    expect(h.listeners.has('llm/stream')).toBe(true)
+    h.emitSession(assistantEvent(reply(BROKEN)))
+    h.boundary({
+      agent: { session: { id: 'sess-1', header: { id: 'sess-1' } }, steer: h.steer },
+      turn: 1,
+      signal: new AbortController().signal,
+    })
+    expect(h.steer).not.toHaveBeenCalled()
   })
 
   it('steers once per turn when the reply has an unrenderable fence', () => {
@@ -572,5 +625,111 @@ describe('installFenceFeedback wiring', () => {
     h.disposeSession()
     h.boundary({ agent: { session: { id: 'sess-1', header: { id: 'sess-1' } }, steer: h.steer }, turn: 1, signal: new AbortController().signal })
     expect(h.steer).not.toHaveBeenCalled()
+  })
+})
+
+describe('GenUI reasoning-only stream recovery', () => {
+  const reasoningOnly: StreamChunk[] = [
+    { type: 'block-start', index: 0, blockType: 'reasoning' },
+    { type: 'reasoning-delta', index: 0, text: 'private reasoning draft' },
+    { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'private reasoning draft' } },
+    { type: 'finish', reason: { kind: 'stop' } },
+  ]
+
+  it('rewrites a validated top-level GenUI reasoning-only stop as EMPTY_RESPONSE', async () => {
+    const h = streamHarness()
+    h.emitSession(userEvent() as SessionEvent)
+    h.emitSession({ type: 'tool/call', seq: 3, time: 1, data: { name: 'validate_dsh_ui', callId: 'validate-1' } } as unknown as SessionEvent)
+    const chunks = await collectChunks(h.stream(agentRequest(), reasoningOnly))
+
+    expect(chunks.slice(0, -1)).toEqual(reasoningOnly.slice(0, -1))
+    expect(chunks.at(-1)).toEqual({
+      type: 'finish',
+      reason: {
+        kind: 'error',
+        failure: {
+          message: 'GenUI turn completed with reasoning only and no deliverable response',
+          code: 'EMPTY_RESPONSE',
+        },
+      },
+    })
+  })
+
+  it('preserves text, tool-call, max-tokens, empty-stop, and existing error finishes', async () => {
+    const h = streamHarness()
+    h.emitSession(userEvent() as SessionEvent)
+    h.emitSession({ type: 'tool/call', seq: 3, time: 1, data: { name: 'validate_dsh_ui', callId: 'validate-1' } } as unknown as SessionEvent)
+    const unchanged: StreamChunk[][] = [
+      [
+        ...reasoningOnly.slice(0, -1),
+        { type: 'block-start', index: 1, blockType: 'text' },
+        { type: 'text-delta', index: 1, text: 'final answer' },
+        { type: 'block-end', index: 1, block: { type: 'text', text: 'final answer' } },
+        { type: 'finish', reason: { kind: 'stop' } },
+      ],
+      [
+        ...reasoningOnly.slice(0, -1),
+        { type: 'block-start', index: 1, blockType: 'tool-call' },
+        { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'call-1', name: 'render_ui', arguments: '{}' } },
+        { type: 'finish', reason: { kind: 'tool-calls' } },
+      ],
+      [ ...reasoningOnly.slice(0, -1), { type: 'finish', reason: { kind: 'max-tokens' } } ],
+      [{ type: 'finish', reason: { kind: 'stop' } }],
+      [{ type: 'finish', reason: { kind: 'error', failure: { message: 'provider failed', code: 'SERVER' } } }],
+      [{ type: 'finish', reason: { kind: 'aborted', failure: { message: 'cancelled', code: 'ABORTED' } } }],
+    ]
+
+    for (const stream of unchanged) {
+      expect(await collectChunks(h.stream(agentRequest(), stream))).toEqual(stream)
+    }
+  })
+
+  it('leaves ordinary turns, unmarked requests, subagents, and auxiliary calls unchanged', async () => {
+    const unvalidated = streamHarness()
+    unvalidated.emitSession(userEvent() as SessionEvent)
+    const ordinaryRequest: GenerateOptions = {
+      provider: 'test-provider',
+      model: 'test-model',
+      messages: [],
+      sessionId: 'sess-1' as NonNullable<GenerateOptions['sessionId']>,
+    }
+    expect(await collectChunks(unvalidated.stream(agentRequest(), reasoningOnly))).toEqual(reasoningOnly)
+
+    const validated = streamHarness()
+    validated.emitSession(userEvent() as SessionEvent)
+    validated.emitSession({ type: 'tool/call', seq: 3, time: 1, data: { name: 'validate_dsh_ui', callId: 'validate-1' } } as unknown as SessionEvent)
+    expect(await collectChunks(validated.stream(ordinaryRequest, reasoningOnly))).toEqual(reasoningOnly)
+    expect(await collectChunks(validated.stream(agentRequest({ purpose: 'compaction' }), reasoningOnly))).toEqual(reasoningOnly)
+
+    const subagent = streamHarness({ parentSession: 'parent-1' })
+    subagent.emitSession(userEvent() as SessionEvent)
+    subagent.emitSession({ type: 'tool/call', seq: 3, time: 1, data: { name: 'validate_dsh_ui', callId: 'validate-1' } } as unknown as SessionEvent)
+    expect(await collectChunks(subagent.stream(agentRequest(), reasoningOnly))).toEqual(reasoningOnly)
+  })
+
+  it('keeps the validation signal for a host retry that returns a text answer', async () => {
+    const h = streamHarness()
+    h.emitSession(userEvent() as SessionEvent)
+    h.emitSession({ type: 'tool/call', seq: 3, time: 1, data: { name: 'validate_dsh_ui', callId: 'validate-1' } } as unknown as SessionEvent)
+    const failedAttempt = await collectChunks(h.stream(agentRequest(), reasoningOnly))
+    const answer: StreamChunk[] = [
+      { type: 'block-start', index: 0, blockType: 'text' },
+      { type: 'text-delta', index: 0, text: 'final answer' },
+      { type: 'block-end', index: 0, block: { type: 'text', text: 'final answer' } },
+      { type: 'finish', reason: { kind: 'stop' } },
+    ]
+    const retriedAttempt = await collectChunks(h.stream(agentRequest(), answer))
+
+    expect((failedAttempt.at(-1) as Extract<StreamChunk, { type: 'finish' }>).reason.kind).toBe('error')
+    expect(retriedAttempt).toEqual(answer)
+  })
+
+  it('keeps host retry recovery enabled when same-turn fence corrections are disabled', async () => {
+    const h = streamHarness({ enabled: false })
+    h.emitSession(userEvent() as SessionEvent)
+    h.emitSession({ type: 'tool/call', seq: 3, time: 1, data: { name: 'validate_dsh_ui', callId: 'validate-1' } } as unknown as SessionEvent)
+
+    const chunks = await collectChunks(h.stream(agentRequest(), reasoningOnly))
+    expect((chunks.at(-1) as Extract<StreamChunk, { type: 'finish' }>).reason.kind).toBe('error')
   })
 })
