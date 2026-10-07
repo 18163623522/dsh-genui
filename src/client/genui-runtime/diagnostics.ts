@@ -131,6 +131,18 @@ export function diagnoseUnknownGenuiFields(value: unknown): GenuiDiagnostic[] {
       pushUnknownField(warnings, path, field, node.type as string)
     }
     diagnoseNestedFields(node, path, definition, warnings)
+    if (node.type === 'list' && Array.isArray(node.items)) {
+      node.items.forEach((item, index) => {
+        if (isNode(item)) return
+        const holder = record(item)
+        if (holder === undefined) return
+        for (const field of Object.keys(holder)) {
+          if (field === 'title' || field === 'desc') continue
+          const itemPath = `${path}.items[${index}]`
+          warnings.push({ kind: 'unknown-field', path: `${itemPath}.${field}`, message: `${itemPath}.${field}: list items render 'title' and 'desc' only — '${field}' is dropped`, type: 'list', field })
+        }
+      })
+    }
   }
   if (Array.isArray(root.items) && !isComponentRoot(root)) {
     for (const field of Object.keys(root)) {

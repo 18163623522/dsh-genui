@@ -18,6 +18,7 @@ function isNode(value: unknown): value is Record<string, unknown> {
 
 /** Fields a `stat` keeps when a metric record is folded into its own node. */
 const STAT_METRIC_FIELDS = ['label', 'value', 'delta', 'spark', 'size'] as const
+const LIST_ITEM_ALIASES = { label: 'title', name: 'title', description: 'desc', content: 'desc', text: 'desc', body: 'desc', detail: 'desc' } as const
 
 /**
  * Normalize one metric record of a stat group into a single-metric `stat`
@@ -188,20 +189,31 @@ function normalizeNode(value: unknown, path: string, warnings: GenuiDiagnostic[]
   if (type === 'row' || type === 'col' || type === 'grid' || type === 'card' || type === 'file-tree' || type === 'timeline' || type === 'breadcrumb') {
     if (type !== 'file-tree' && type !== 'timeline' && type !== 'breadcrumb') out.items = normalizeNodeArray(out.items, `${path}.items`)
   } else if (type === 'list' && Array.isArray(out.items)) {
-    // List items are a union (string | {title,desc} | nested node), and models
-    // routinely dump 1×N / N×1 table cells in place of the item: `[["文本"]]`
-    // renders as an EMPTY list and `{title, description}` loses its body
-    // (repair reads `desc`). Both are pure shape defects — normalize them here
-    // so validation, diagnostics, and repair all see the canonical item.
+    // List records and nested nodes share items; aliases only belong to records.
     out.items = out.items.map((child, index) => {
       if (isNode(child)) return normalizeNodeValue(child, `${path}.items[${index}]`)
       if (Array.isArray(child) && child.length === 1 && typeof child[0] === 'string') return child[0]
       const holder = record(child)
-      if (holder === undefined || !('description' in holder)) return holder === undefined ? child : { ...holder }
+      if (holder === undefined) return child
       const normalizedHolder = { ...holder }
-      const description = normalizedHolder.description
-      delete normalizedHolder.description
-      if (!('desc' in normalizedHolder) && typeof description === 'string') normalizedHolder.desc = description
+      const itemPath = `${path}.items[${index}]`
+      for (const [alias, canonical] of Object.entries(LIST_ITEM_ALIASES)) {
+        if (!(alias in normalizedHolder)) continue
+        const keptCanonical = canonical in normalizedHolder
+        if (!keptCanonical) normalizedHolder[canonical] = normalizedHolder[alias]
+        delete normalizedHolder[alias]
+        warnings.push({
+          kind: 'alias', path: `${itemPath}.${alias}`, type, field: alias, canonical,
+          message: keptCanonical
+            ? `${itemPath}.${alias} is ignored because canonical field '${canonical}' is present`
+            : `${itemPath}.${alias} normalized/adopted as '${canonical}'`,
+        })
+      }
+      if (!('title' in normalizedHolder) && typeof normalizedHolder.desc === 'string') {
+        normalizedHolder.title = normalizedHolder.desc
+        delete normalizedHolder.desc
+        warnings.push({ kind: 'alias', path: `${itemPath}.desc`, type, field: 'desc', canonical: 'title', message: `${itemPath}.desc normalized/adopted as 'title'` })
+      }
       return normalizedHolder
     })
   } else if (type === 'keyvalue' && Array.isArray(out.pairs)) {
