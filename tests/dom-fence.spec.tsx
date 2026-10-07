@@ -128,6 +128,71 @@ afterEach(() => {
 })
 
 describe('installDomFenceRenderer', () => {
+  it('renders a Desktop tag-text fence and restores the original text on disposal', async () => {
+    const row = assistantRow('desktop-tag')
+    const prose = document.createElement('span')
+    prose.textContent = '回答正文'
+    const tag = document.createElement('span')
+    tag.className = '_plainRun_fbulu_6'
+    tag.textContent = `<dsh-ui>\r\n${VALID_SPEC}\r\n</dsh-ui>`
+    row.append(prose, tag)
+    document.body.appendChild(row)
+    const dispose = installDomFenceRenderer(makeModernCtx('desktop-session'), () => {})
+    try {
+      expect(await waitFor(() => row.querySelector('.genui-dom-fence')?.textContent?.includes('你好，世界') === true)).toBe(true)
+      expect(tag.style.display).toBe('none')
+      expect(prose.textContent).toBe('回答正文')
+    } finally { dispose() }
+    expect(tag.style.display).toBe('')
+    expect(tag.textContent).toContain(VALID_SPEC)
+  })
+
+  it('updates a tag-text fence as its content changes', async () => {
+    const row = assistantRow('desktop-stream', true)
+    const tag = document.createElement('span')
+    tag.textContent = `<dsh-ui>\n${VALID_SPEC}\n</dsh-ui>`
+    row.appendChild(tag)
+    document.body.appendChild(row)
+    const dispose = installDomFenceRenderer(makeModernCtx('desktop-stream-session'), () => {})
+    try {
+      expect(await waitFor(() => row.querySelector('.genui-dom-fence')?.textContent?.includes('你好，世界') === true)).toBe(true)
+      tag.textContent = '<dsh-ui>\n{"title":"更新","items":[{"type":"text","content":"更新内容"}]}\n</dsh-ui>'
+      row.removeAttribute('data-streaming')
+      expect(await waitFor(() => row.querySelector('.genui-dom-fence')?.textContent?.includes('更新内容') === true)).toBe(true)
+    } finally { dispose() }
+  })
+
+  it('renders tag text when the host omits the conversation row attributes', async () => {
+    const tag = document.createElement('span')
+    tag.textContent = `<dsh-ui>\n${VALID_SPEC}\n</dsh-ui>`
+    document.body.appendChild(tag)
+    const dispose = installDomFenceRenderer(makeModernCtx('desktop-no-row-session'), () => {})
+    try {
+      expect(await waitFor(() => document.querySelector('.genui-dom-fence')?.textContent?.includes('你好，世界') === true)).toBe(true)
+      expect(tag.style.display).toBe('none')
+    } finally { dispose() }
+  })
+
+  it('leaves non-assistant and incomplete tag text visible', async () => {
+    const userRow = document.createElement('div')
+    userRow.setAttribute('data-chat-flow-kind', 'user')
+    const userTag = document.createElement('span')
+    userTag.textContent = `<dsh-ui>${VALID_SPEC}</dsh-ui>`
+    userRow.appendChild(userTag)
+    const assistant = assistantRow('desktop-incomplete')
+    const incomplete = document.createElement('span')
+    incomplete.textContent = `<dsh-ui>${VALID_SPEC}`
+    assistant.appendChild(incomplete)
+    document.body.append(userRow, assistant)
+    const dispose = installDomFenceRenderer(makeModernCtx('desktop-filter-session'), () => {})
+    try {
+      await tick()
+      expect(document.querySelector('.genui-dom-fence')).toBeNull()
+      expect(userTag.style.display).toBe('')
+      expect(incomplete.style.display).toBe('')
+    } finally { dispose() }
+  })
+
   it.each(['Code', 'Code block', '代码块', 'Код', 'Código', 'Codice', 'Kode'])('renders canonical GenUI from a generic %s banner', async label => {
     // 标签集合刻意跨语系：本地化通用标题是宿主呈现文案，不是语言（issue #258）——
     // 旧白名单只列英/中，俄语等 locale 下同一份围栏永远停在代码块。
