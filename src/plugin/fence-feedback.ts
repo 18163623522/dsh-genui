@@ -31,6 +31,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-agent'
+import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import { createHash, randomUUID } from 'node:crypto'
@@ -199,6 +200,8 @@ interface SessionFeedback {
    * the reasoning block.
    */
   validatedThisTurn: boolean
+  /** 子代理会话的输出不会直接交给用户。 */
+  isSubagent: boolean
   /**
    * The turn delivered something formal: a non-empty body text, or a
    * `render_ui` call whose RESULT reports success. A failed render is not an
@@ -307,6 +310,47 @@ export function missingBodyCorrectionText(turn: number, attempt = 1): string {
   return `${head}本轮尚未产生正式回答，也没有通过支持的通道交付结果${emphasis}。请根据用户当前请求完成正式答复；需要 UI 时，在回答正文输出你最终选定的 dsh-ui 围栏，或明确调用 render_ui。可以修改或放弃此前候选；不能完成时，请在正文说明原因。\n`
 }
 
+/**
+ * 将 GenUI 回合中仅含 reasoning 的完整响应转换为宿主已有的可重试空响应错误。
+ *
+ * @param options - LLM stream waterfall 拦截的请求。
+ * @param source - 本次请求的 provider stream。
+ * @returns 原始 stream；仅符合条件的终止 stop 会被改写。
+ */
+async function* retryReasoningOnlyGenuiStream(
+  options: GenerateOptions,
+  source: AsyncIterable<StreamChunk>,
+): AsyncGenerator<StreamChunk> {
+  const { EMPTY_RESPONSE_CODE, isAgentLoopRequest } = await import('@deepseek-ai/dsh-llm')
+  if (!isAgentLoopRequest(options)) {
+    yield* source
+    return
+  }
+
+  let hasReasoningBlock = false
+  let hasOtherBlock = false
+  for await (const chunk of source) {
+    if (chunk.type === 'block-end') {
+      if (chunk.block.type === 'reasoning') hasReasoningBlock = true
+      else hasOtherBlock = true
+    }
+    if (chunk.type === 'finish' && chunk.reason.kind === 'stop' && hasReasoningBlock && !hasOtherBlock) {
+      yield {
+        type: 'finish',
+        reason: {
+          kind: 'error',
+          failure: {
+            message: 'GenUI turn completed with reasoning only and no deliverable response',
+            code: EMPTY_RESPONSE_CODE,
+          },
+        },
+      }
+    } else {
+      yield chunk
+    }
+  }
+}
+
 /** Text of one assistant message's text blocks, in order. */
 function textOfContent(content: unknown): string {
   if (!Array.isArray(content)) return ''
@@ -371,13 +415,12 @@ function isFeedbackSource(source: { kind?: unknown; plugin?: unknown } | undefin
 }
 
 /**
- * 根据插件配置启用围栏反馈流程。
+ * 注册 GenUI 回合跟踪、宿主重试判定和可选的围栏修正流程。
  *
- * @param ctx - the host context.
- * @param enabled - the plugin config flag; the loop is inert when false.
+ * @param ctx - 宿主 Context。
+ * @param enabled - 是否启用同回合围栏修正。
  */
 export function installFenceFeedback(ctx: Context, enabled: boolean): void {
-  if (!enabled) return
   const sessions = new Map<string, SessionFeedback>()
   const stateOf = (sessionId: string): SessionFeedback => {
     let state = sessions.get(sessionId)
@@ -385,6 +428,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
       state = {
         text: '',
         validatedThisTurn: false,
+        isSubagent: false,
         deliveredThisTurn: false,
         pendingRenders: new Set(),
         correctedSpec: new Set(),
@@ -415,13 +459,17 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
       // settled and this turn starts clean. The `user/message` reset below is
       // only a fallback for direct prompts.
       const state = sessions.get(sessionId)
-      if (state !== undefined) resetTurnState(state)
+      if (state !== undefined) {
+        state.isSubagent = session.header.parentSession !== undefined
+        resetTurnState(state)
+      }
       return
     }
     if (event.type === 'assistant/message') {
       const content = (event.data as { message?: { content?: unknown } }).message?.content
       const text = textOfContent(content)
       const state = stateOf(sessionId)
+      state.isSubagent = session.header.parentSession !== undefined
       // Fences are read from the BODY only: a draft in the reasoning block is not
       // a delivery and must not become one.
       state.text = extractDshUiFences(text).length > 0 ? text : ''
@@ -434,6 +482,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
     if (event.type === 'tool/call') {
       const data = event.data as { name?: unknown; callId?: unknown }
       const state = stateOf(sessionId)
+      state.isSubagent = session.header.parentSession !== undefined
       // validate_dsh_ui is the FORMAL signal that this turn is GenUI-related.
       if (data.name === 'validate_dsh_ui') state.validatedThisTurn = true
       // The result — not the call — decides whether render_ui delivered.
@@ -454,6 +503,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
       const callId = typeof block?.toolCallId === 'string' ? block.toolCallId : undefined
       if (callId === undefined || block === undefined) return
       const state = stateOf(sessionId)
+      state.isSubagent = session.header.parentSession !== undefined
       if (!state.pendingRenders.delete(callId)) return
       // Success = no internal failure identity AND the model-facing block is
       // not an error. Anything else leaves the turn undelivered so the
@@ -469,6 +519,7 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
       const fingerprints = markersIn(textOfContent(data.content))
       if (fingerprints.length === 0) return
       const state = stateOf(sessionId)
+      state.isSubagent = session.header.parentSession !== undefined
       for (const fingerprint of fingerprints) state.correctedSpec.add(fingerprint)
       return
     }
@@ -479,10 +530,21 @@ export function installFenceFeedback(ctx: Context, enabled: boolean): void {
     // delivery state before the boundary could use it.
     if (data.source?.kind !== 'user') return
     const state = sessions.get(sessionId)
-    if (state !== undefined) resetTurnState(state)
+    if (state !== undefined) {
+      state.isSubagent = session.header.parentSession !== undefined
+      resetTurnState(state)
+    }
   })
 
+  ctx.on('llm/stream', (options, next) => {
+    if (options.sessionId === undefined || options.purpose !== undefined) return next()
+    const state = sessions.get(String(options.sessionId))
+    if (state?.validatedThisTurn !== true || state.isSubagent) return next()
+    return retryReasoningOnlyGenuiStream(options, next())
+  }, { global: true })
+
   ctx.on('agent/turn-stopping', ({ agent, turn, signal }): void => {
+    if (!enabled) return
     // A child session's fence belongs to a parent reply, and an aborted turn is
     // on its way out: never steer into either.
     if (agent.session.header.parentSession !== undefined) return
