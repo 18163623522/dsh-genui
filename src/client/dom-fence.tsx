@@ -4,8 +4,9 @@
  * Stock DSH renders every fenced code block through the shared CodeBlock
  * surface (stable class `md-code-block`, language label rendered as the
  * banner's childless label div). This channel observes the conversation DOM,
- * finds blocks labelled `dsh-ui`, parses the raw fence body and mounts the
- * plugin's own React tree next to the (hidden) stock block:
+ * finds blocks labelled `dsh-ui` or complete `<dsh-ui>…</dsh-ui>` text spans,
+ * parses the raw fence body and mounts the plugin's own React tree next to
+ * the hidden host element:
  *
  * Fence discovery is **multi-surface** (issue #6): besides `md-code-block`,
  * the channel also matches the deepsuite-style surfaces some host builds
@@ -13,8 +14,9 @@
  * structural backstop — ANY element whose banner labels it `dsh-ui` and
  * which contains a `<pre>` body. The only invariants are the language label
  * (a leaf element with the exact text `dsh-ui`, outside the code body) and
- * the `<pre>`, so a host DOM drift degrades to a rendered fence, never a
- * silently skipped one:
+ * the `<pre>`. Desktop 0.11.0 instead emits a plain-text tag span for the
+ * same fence; the DOM channel recognizes that exact wrapper in assistant
+ * messages:
  *
  * - **Streaming takeover**: the channel takes over a dsh-ui block as soon as
  *   ONE finished component parses (the partial parser), and re-renders the
@@ -46,7 +48,7 @@
  *
  * Security posture matches the registry channel: only code shipped in this
  * plugin's browser bundle mounts React roots, the model can only author
- * fence text, and unrepairable bodies stay stock code blocks.
+ * fence text, and unrepairable bodies remain visible in their host form.
  */
 import { Fragment, isValidElement, type Key, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -160,6 +162,18 @@ interface Mount {
 
 function isTextNode(node: Node): node is Text {
   return node.nodeType === Node.TEXT_NODE
+}
+
+/** 读取 DSH Desktop 0.11.0 将 dsh-ui 围栏呈现为纯文本标签时的正文。 */
+function tagTextBodyOf(block: Element): string | null {
+  if (block.tagName !== 'SPAN' || block.childElementCount !== 0) return null
+  const flowKind = block.closest('[data-chat-flow-kind]')?.getAttribute('data-chat-flow-kind')
+  if (flowKind !== undefined && flowKind !== null && flowKind !== 'assistant-step') return null
+  const text = block.textContent?.trim() ?? ''
+  const opening = '<dsh-ui>'
+  const closing = '</dsh-ui>'
+  if (!text.startsWith(opening) || !text.endsWith(closing)) return null
+  return text.slice(opening.length, -closing.length).trim()
 }
 
 /** The banner's language label: a leaf element whose text is exactly the
@@ -281,8 +295,10 @@ function isGenericGenuiFence(block: Element, raw: string): boolean {
   return JSON.stringify(normalizeGenuiSpec(value).value) === JSON.stringify(value)
 }
 
-/** Raw fence body from the stock block's code surface. */
+/** 读取宿主代码块或纯文本标签中的围栏正文。 */
 function rawOf(block: Element): string {
+  const tagTextBody = tagTextBodyOf(block)
+  if (tagTextBody !== null) return tagTextBody
   const pre = block.querySelector('pre')
   if (pre === null) return ''
   let text = ''
@@ -324,7 +340,7 @@ function implausibleLabeledAncestorOf(pre: HTMLElement, scope: ParentNode = docu
 }
 
 /**
- * Every dsh-ui fence surface under `scope`, outer-most first, deduped.
+ * Every dsh-ui fence surface or complete tag-text span under `scope`, in DOM order.
  * Known surface classes first (cheap, ordered), then a structural sweep —
  * every `<pre>` whose banner labels it `dsh-ui` — so a host with an
  * unlisted surface shape still renders. The label + `<pre>` gates make the
@@ -377,7 +393,12 @@ function findFenceCandidates(scope: ParentNode = document): HTMLElement[] {
     out.push(surface)
     seen.add(surface)
   }
-  return out
+  for (const span of scope.querySelectorAll<HTMLElement>('span')) {
+    if (span.closest(`.${CONTAINER_CLASS}, .${DIAGNOSTIC_CLASS}, ${CODE_BLOCK_SELECTORS}, [data-chat-group-part="reasoning"], [data-tool], [data-sidebar-chat], [data-sidebar-right-session], [data-sidebar-right-panel], [data-panel-conversation], [data-plugin-panel]`) !== null) continue
+    if (tagTextBodyOf(span) === null) continue
+    out.push(span)
+  }
+  return out.sort((left, right) => left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
 }
 
 /** One-time-per-install drift diagnostic flag (reset per install, so tests
@@ -433,7 +454,7 @@ function fenceIndexOf(ctx: Context, row: Element, block: Element, sourceLanguage
     let fallbackIndex = 0
     for (const candidate of findFenceCandidates(scope)) {
       if (candidate.closest(STREAMING) !== null) continue
-      const language = domLanguageOf(candidate) ?? sourceLanguage(candidate)
+      const language = tagTextBodyOf(candidate) !== null ? 'dsh-ui' : domLanguageOf(candidate) ?? sourceLanguage(candidate)
       if (language !== 'dsh-ui' && !(language === undefined && isGenericGenuiFence(candidate, rawOf(candidate)))) continue
       fallbackIndex += 1
       if (candidate === block) return fallbackIndex
@@ -441,9 +462,11 @@ function fenceIndexOf(ctx: Context, row: Element, block: Element, sourceLanguage
     return fallbackIndex + 1
   }
   let index = 0
-  for (const candidate of hostFenceBlocksOf(row)) {
+  for (const candidate of findFenceCandidates(row)) {
     if (candidate.closest(STREAMING) !== null) continue
-    const language = domLanguageOf(candidate) ?? sourceLanguage(candidate)
+    if (candidate.closest(ASSISTANT_FLOW_ROW) !== row) continue
+    if (candidate.closest('[data-chat-group-part="reasoning"]') !== null) continue
+    const language = tagTextBodyOf(candidate) !== null ? 'dsh-ui' : domLanguageOf(candidate) ?? sourceLanguage(candidate)
     if (language !== 'dsh-ui' && !(language === undefined && isGenericGenuiFence(candidate, rawOf(candidate)))) continue
     index += 1
     if (candidate === block) return index
@@ -794,7 +817,7 @@ export function installDomFenceRenderer(
     if (block.hasAttribute(PROCESSED)) return
     const row = rowOf(block)
     const settled = isSettled(block)
-    const domLanguage = domLanguageOf(block)
+    const domLanguage = tagTextBodyOf(block) !== null ? 'dsh-ui' : domLanguageOf(block)
     const sourceLanguage = domLanguage === null ? sourceLanguages.get(block) : undefined
     const language = domLanguage ?? sourceLanguage
     const raw = rawOf(block)
@@ -927,7 +950,7 @@ export function installDomFenceRenderer(
       }
       const raw = rawOf(block)
       const settled = isSettled(block)
-      const domLanguage = domLanguageOf(block)
+      const domLanguage = tagTextBodyOf(block) !== null ? 'dsh-ui' : domLanguageOf(block)
       const sourceLanguage = domLanguage === null ? sourceLanguages.get(block) : undefined
       const language = domLanguage ?? sourceLanguage
       const validGenui = language === 'dsh-ui'
@@ -1022,7 +1045,7 @@ export function installDomFenceRenderer(
       // label is no longer dsh-ui is somebody else's fence, so our explanation
       // would be about the wrong block.
       if (isSettled(block)) {
-        const domLanguage = domLanguageOf(block)
+        const domLanguage = tagTextBodyOf(block) !== null ? 'dsh-ui' : domLanguageOf(block)
         const sourceLanguage = domLanguage === null ? sourceLanguages.get(block) : undefined
         if ((domLanguage ?? sourceLanguage) !== 'dsh-ui') {
           clearDiagnostic(block)
